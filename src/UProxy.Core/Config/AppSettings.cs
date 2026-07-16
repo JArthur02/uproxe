@@ -38,8 +38,7 @@ public sealed class AppSettings
     public string SocksSourcesPath { get; set; } = Path.Combine("Data", "Source", "SocksSource.txt");
     public string GeoIpDatabasePath { get; set; } = Path.Combine("Data", "Country.mmdb");
 
-    public string UserAgent { get; set; } =
-        "μProxy-Tool/2.0 (+https://github.com; privacy-respecting proxy checker)";
+    public string UserAgent { get; set; } = UserAgents.Default;
 
     /// <summary>Proxifier-compatible: resolve destination hostnames through the proxy (SOCKS4a / SOCKS5 domain).</summary>
     public bool ResolveHostnamesThroughProxy { get; set; } = true;

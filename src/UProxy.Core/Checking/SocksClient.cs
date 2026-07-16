@@ -21,7 +21,7 @@ public sealed class SocksConnectOptions
 /// <summary>SOCKS4 / SOCKS4a / SOCKS5 client with embedded auth and Fake-IP aware remote DNS.</summary>
 public static class SocksClient
 {
-    public static async Task<(bool Ok, FailureReason Failure, string? Error, int LatencyMs, ProxyAuthMethod Auth)> ConnectAndHttpGetAsync(
+    public static async Task<(bool Ok, FailureReason Failure, string? Error, int LatencyMs, int ConnectMs, ProxyAuthMethod Auth)> ConnectAndHttpGetAsync(
         ParsedProxy proxy,
         ProxyProtocol socksVersion,
         string destinationHost,
@@ -33,6 +33,7 @@ public static class SocksClient
     {
         options ??= new SocksConnectOptions();
         var authUsed = ProxyAuthMethod.None;
+        var connectMs = 0;
         var sw = System.Diagnostics.Stopwatch.StartNew();
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(timeoutMs);
@@ -52,7 +53,11 @@ public static class SocksClient
                           ?? throw new SocketException((int)SocketError.HostNotFound);
             }
 
+            // Test 1 + Test 3: pure TCP connect to the proxy (reachability + connect latency).
+            var connectSw = System.Diagnostics.Stopwatch.StartNew();
             await socket.ConnectAsync(new IPEndPoint(proxyIp, proxy.Port), cts.Token).ConfigureAwait(false);
+            connectSw.Stop();
+            connectMs = (int)connectSw.ElapsedMilliseconds;
 
             var dest = ResolveDestination(destinationHost, options);
 
@@ -79,37 +84,40 @@ public static class SocksClient
             sw.Stop();
 
             if (read < 12)
-                return (false, FailureReason.EmptyResponse, "No HTTP response through SOCKS", (int)sw.ElapsedMilliseconds, authUsed);
+                return (false, FailureReason.EmptyResponse, "No HTTP response through SOCKS", (int)sw.ElapsedMilliseconds, connectMs, authUsed);
 
             var text = Encoding.ASCII.GetString(buffer, 0, read);
             if (!text.StartsWith("HTTP/", StringComparison.Ordinal))
-                return (false, FailureReason.JudgeMismatch, "Non-HTTP response through SOCKS", (int)sw.ElapsedMilliseconds, authUsed);
+                return (false, FailureReason.JudgeMismatch, "Non-HTTP response through SOCKS", (int)sw.ElapsedMilliseconds, connectMs, authUsed);
 
-            return (true, FailureReason.None, null, (int)sw.ElapsedMilliseconds, authUsed);
+            return (true, FailureReason.None, null, (int)sw.ElapsedMilliseconds, connectMs, authUsed);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            return (false, FailureReason.Cancelled, "Cancelled", (int)sw.ElapsedMilliseconds, authUsed);
+            return (false, FailureReason.Cancelled, "Cancelled", (int)sw.ElapsedMilliseconds, connectMs, authUsed);
         }
         catch (OperationCanceledException)
         {
-            return (false, FailureReason.Timeout, "Timed out", (int)sw.ElapsedMilliseconds, authUsed);
+            // If we never finished connecting to the proxy, it's a proxy connect timeout;
+            // otherwise the handshake/target hop timed out.
+            var reason = connectMs == 0 ? FailureReason.ConnectTimeout : FailureReason.Timeout;
+            return (false, reason, "Timed out", (int)sw.ElapsedMilliseconds, connectMs, authUsed);
         }
         catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused)
         {
-            return (false, FailureReason.ConnectRefused, ex.Message, (int)sw.ElapsedMilliseconds, authUsed);
+            return (false, FailureReason.ConnectRefused, ex.Message, (int)sw.ElapsedMilliseconds, connectMs, authUsed);
         }
         catch (SocketException ex) when (ex.SocketErrorCode is SocketError.TimedOut or SocketError.TryAgain)
         {
-            return (false, FailureReason.ConnectTimeout, ex.Message, (int)sw.ElapsedMilliseconds, authUsed);
+            return (false, FailureReason.ConnectTimeout, ex.Message, (int)sw.ElapsedMilliseconds, connectMs, authUsed);
         }
         catch (SocksProtocolException ex)
         {
-            return (false, ex.Reason, ex.Message, (int)sw.ElapsedMilliseconds, authUsed);
+            return (false, ex.Reason, ex.Message, (int)sw.ElapsedMilliseconds, connectMs, authUsed);
         }
         catch (Exception ex)
         {
-            return (false, FailureReason.UnknownError, ex.Message, (int)sw.ElapsedMilliseconds, authUsed);
+            return (false, FailureReason.UnknownError, ex.Message, (int)sw.ElapsedMilliseconds, connectMs, authUsed);
         }
     }
 
@@ -198,9 +206,14 @@ public static class SocksClient
                 0x5D => "SOCKS4 rejected: identd user-id mismatch",
                 _ => $"SOCKS4 rejected (code 0x{resp[1]:X2})"
             };
-            var reason = resp[1] is 0x5C or 0x5D
-                ? FailureReason.AuthenticationRequired
-                : FailureReason.ProxyHandshakeFailure;
+            // TCP to the proxy already succeeded, so a plain rejection means the proxy could not
+            // reach the requested target; identd codes are auth-related.
+            var reason = resp[1] switch
+            {
+                0x5C or 0x5D => FailureReason.AuthenticationRequired,
+                0x5B => FailureReason.TargetUnreachableThroughProxy,
+                _ => FailureReason.ProxyHandshakeFailure
+            };
             throw new SocksProtocolException(reason, msg);
         }
 
@@ -349,8 +362,10 @@ public static class SocksClient
 
     private static FailureReason MapSocks5Reply(byte code) => code switch
     {
+        // 0x03 network unreachable, 0x04 host unreachable, 0x05 connection refused by target:
+        // the proxy was reached but could not complete the onward connection.
+        0x03 or 0x04 or 0x05 => FailureReason.TargetUnreachableThroughProxy,
         0x02 => FailureReason.ConnectRefused,
-        0x05 => FailureReason.ConnectRefused,
         0x06 => FailureReason.DnsFailure,
         _ => FailureReason.ProxyHandshakeFailure
     };
