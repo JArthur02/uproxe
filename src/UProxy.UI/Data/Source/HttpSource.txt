@@ -1,0 +1,13 @@
+# HTTP(S) proxy list sources (one URL per line)
+# Lines starting with # ; // are comments
+# TheSpeedX/PROXY-List
+https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt
+# monosans/proxy-list
+https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt
+# proxifly/free-proxy-list
+https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/http/data.txt
+# ProxyScrape API
+https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=10000&country=all
+# ErcinDedeoglu/proxies
+https://raw.githubusercontent.com/ErcinDedeoglu/proxies/main/proxies/http.txt
+https://raw.githubusercontent.com/ErcinDedeoglu/proxies/main/proxies/https.txt

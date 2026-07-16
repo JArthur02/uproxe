@@ -1,0 +1,161 @@
+using System.Diagnostics;
+using System.Net;
+using UProxy.Core.Config;
+using UProxy.Core.Dns;
+using UProxy.Core.GeoIp;
+using UProxy.Core.Models;
+
+namespace UProxy.Core.Checking;
+
+public sealed class ProxyChecker
+{
+    private readonly AppSettings _settings;
+    private readonly JudgeClient _judge;
+    private readonly IGeoIpResolver _geoIp;
+    private readonly FakeIpDns _fakeIpDns = new();
+    private IPAddress? _clientIp;
+    private bool _clientIpResolved;
+
+    public ProxyChecker(AppSettings settings, IGeoIpResolver? geoIp = null, JudgeClient? judge = null)
+    {
+        _settings = settings;
+        _geoIp = geoIp ?? NullGeoIpResolver.Instance;
+        _judge = judge ?? new JudgeClient(settings);
+    }
+
+    public FakeIpDns FakeIpDns => _fakeIpDns;
+
+    public async Task EnsureClientIpAsync(CancellationToken ct)
+    {
+        if (_clientIpResolved)
+            return;
+        _clientIp = await _judge.GetDirectClientIpAsync(ct).ConfigureAwait(false);
+        _clientIpResolved = true;
+    }
+
+    public async Task<ProxyCheckResult> CheckHttpAsync(ParsedProxy proxy, CancellationToken ct)
+    {
+        await EnsureClientIpAsync(ct).ConfigureAwait(false);
+        var sw = Stopwatch.StartNew();
+
+        var (body, failure, error, auth) = await _judge.FetchThroughHttpProxyAsync(proxy, ct).ConfigureAwait(false);
+        sw.Stop();
+
+        if (body is null || failure != FailureReason.None)
+        {
+            return new ProxyCheckResult
+            {
+                Proxy = proxy,
+                IsAlive = false,
+                Failure = failure,
+                ErrorMessage = error,
+                LatencyMs = (int)sw.ElapsedMilliseconds,
+                AuthMethod = auth
+            };
+        }
+
+        var anonymity = AnonymityClassifier.Classify(body, _clientIp);
+        var observed = AnonymityClassifier.TryGetRemoteAddr(body);
+        var country = _geoIp.LookupCountry(proxy.Host);
+
+        var protocol = ProxyProtocol.Http;
+        var (httpsOk, _, _) = await _judge.ProbeHttpsAsync(proxy, ct).ConfigureAwait(false);
+        if (httpsOk)
+            protocol = ProxyProtocol.Https;
+
+        return new ProxyCheckResult
+        {
+            Proxy = proxy,
+            IsAlive = true,
+            ConfirmedProtocol = protocol,
+            Anonymity = anonymity,
+            Country = country,
+            LatencyMs = (int)Math.Min(sw.ElapsedMilliseconds, _settings.TimeoutMs),
+            ObservedSourceIp = observed?.ToString(),
+            Failure = FailureReason.None,
+            AuthMethod = auth
+        };
+    }
+
+    public async Task<ProxyCheckResult> CheckSocksAsync(ParsedProxy proxy, CancellationToken ct)
+    {
+        await EnsureClientIpAsync(ct).ConfigureAwait(false);
+
+        var judgeUri = new Uri(_settings.JudgeUrl.Contains("://") ? _settings.JudgeUrl : "http://" + _settings.JudgeUrl);
+        var destHost = judgeUri.Host;
+        var destPort = judgeUri.IsDefaultPort ? 80 : judgeUri.Port;
+        var path = string.IsNullOrEmpty(judgeUri.PathAndQuery) ? "/" : judgeUri.PathAndQuery;
+
+        string? fakeIp = null;
+        if (_settings.EnableFakeIpDns && _settings.ResolveHostnamesThroughProxy &&
+            !IPAddress.TryParse(destHost, out _))
+        {
+            fakeIp = _fakeIpDns.Allocate(destHost).ToString();
+        }
+
+        var socksOpts = new SocksConnectOptions
+        {
+            UseSocks4a = _settings.UseSocks4a,
+            ResolveHostnamesThroughProxy = _settings.ResolveHostnamesThroughProxy,
+            FakeIpDns = _settings.EnableFakeIpDns ? _fakeIpDns : null
+        };
+
+        var socksDest = fakeIp ?? destHost;
+
+        var socks4 = await SocksClient.ConnectAndHttpGetAsync(
+            proxy, ProxyProtocol.Socks4, socksDest, destPort, path, _settings.TimeoutMs, ct, socksOpts).ConfigureAwait(false);
+        var socks5 = await SocksClient.ConnectAndHttpGetAsync(
+            proxy, ProxyProtocol.Socks5, socksDest, destPort, path, _settings.TimeoutMs, ct, socksOpts).ConfigureAwait(false);
+
+        if (!socks4.Ok && !socks5.Ok)
+        {
+            return new ProxyCheckResult
+            {
+                Proxy = proxy,
+                IsAlive = false,
+                Failure = socks5.Failure != FailureReason.None ? socks5.Failure : socks4.Failure,
+                ErrorMessage = socks5.Error ?? socks4.Error,
+                LatencyMs = Math.Max(socks4.LatencyMs, socks5.LatencyMs),
+                AuthMethod = socks5.Auth != ProxyAuthMethod.None ? socks5.Auth : socks4.Auth,
+                UsedRemoteDns = _settings.ResolveHostnamesThroughProxy,
+                FakeIp = fakeIp
+            };
+        }
+
+        ProxyProtocol confirmed;
+        int latency;
+        ProxyAuthMethod auth;
+        if (socks4.Ok && socks5.Ok)
+        {
+            confirmed = ProxyProtocol.Socks4And5;
+            latency = (socks4.LatencyMs + socks5.LatencyMs) / 2;
+            auth = socks5.Auth != ProxyAuthMethod.None ? socks5.Auth : socks4.Auth;
+        }
+        else if (socks4.Ok)
+        {
+            confirmed = ProxyProtocol.Socks4;
+            latency = socks4.LatencyMs;
+            auth = socks4.Auth;
+        }
+        else
+        {
+            confirmed = ProxyProtocol.Socks5;
+            latency = socks5.LatencyMs;
+            auth = socks5.Auth;
+        }
+
+        return new ProxyCheckResult
+        {
+            Proxy = proxy,
+            IsAlive = true,
+            ConfirmedProtocol = confirmed,
+            Anonymity = AnonymityLevel.Elite,
+            Country = _geoIp.LookupCountry(proxy.Host),
+            LatencyMs = latency,
+            Failure = FailureReason.None,
+            AuthMethod = auth,
+            UsedRemoteDns = _settings.ResolveHostnamesThroughProxy,
+            FakeIp = fakeIp
+        };
+    }
+}
