@@ -124,3 +124,31 @@ public class AnonymityClassifierTests
         Assert.False(AnonymityClassifier.LooksLikeAzenv("OK"));
     }
 }
+
+public class SourceLoaderTests
+{
+    [Fact]
+    public void LoadUrls_DedupesDirectAndExpandedSources()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(path, """
+                # comment
+                https://example.com/list.txt
+                https://example.com/list.txt
+                https://mirror[1-2].example.com/proxies.txt
+                https://mirror1.example.com/proxies.txt
+                """);
+
+            var urls = new UProxy.Core.Scraping.SourceLoader().LoadUrls(path);
+
+            Assert.Equal(3, urls.Count);
+            Assert.Equal(urls.Count, urls.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+}

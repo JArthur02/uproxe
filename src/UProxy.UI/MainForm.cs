@@ -166,7 +166,7 @@ public sealed class MainForm : Form
             GridColumn(nameof(ResultRow.Country), "Country", 70),
             GridColumn(nameof(ResultRow.Anonymity), "Anonymity", 90),
             GridColumn(nameof(ResultRow.Protocol), "Type", 80),
-            GridColumn(nameof(ResultRow.LatencyMs), "Latency", 70),
+            GridColumn(nameof(ResultRow.LatencyMs), "Latency (ms)", 80),
             GridColumn(nameof(ResultRow.Auth), "Auth", 90),
             GridColumn(nameof(ResultRow.Detail), "Detail", 220)
         ]);
@@ -230,6 +230,7 @@ public sealed class MainForm : Form
             EnsureSession();
             _session!.ClearResults();
             _rows.Clear();
+            _btnExport.Enabled = false;
             UpdateTitle();
             SetStatus("Results cleared.");
         });
@@ -295,6 +296,7 @@ public sealed class MainForm : Form
                 _session!.ClearProxies();
                 _session.ClearResults();
                 _rows.Clear();
+                _btnExport.Enabled = false;
                 SetStatus("Cleared.");
             }
             e.Handled = true;
@@ -457,6 +459,7 @@ public sealed class MainForm : Form
         }
 
         _rows.Clear();
+        _btnExport.Enabled = false;
         SetBusy(true);
         try
         {

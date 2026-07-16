@@ -13,6 +13,7 @@ public sealed class SourceLoader
             return [];
 
         var urls = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var lines = File.ReadAllLines(path);
         for (var i = 0; i < lines.Length; i++)
         {
@@ -25,14 +26,20 @@ public sealed class SourceLoader
             // Legacy range expansion: url[1-3] → url1, url2, url3 (bounded)
             if (TryExpandRange(line, out var expanded))
             {
-                urls.AddRange(expanded);
+                foreach (var expandedUrl in expanded)
+                {
+                    if (seen.Add(expandedUrl))
+                        urls.Add(expandedUrl);
+                }
                 continue;
             }
 
             if (Uri.TryCreate(line, UriKind.Absolute, out var uri) &&
                 (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
             {
-                urls.Add(uri.ToString());
+                var normalized = uri.ToString();
+                if (seen.Add(normalized))
+                    urls.Add(normalized);
             }
         }
 
