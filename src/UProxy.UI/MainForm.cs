@@ -15,15 +15,16 @@ public sealed class MainForm : Form
     private readonly AppSettings _settings;
     private readonly string _settingsPath;
     private readonly string _appDirectory;
-    private readonly BindingList<ResultRow> _rows = [];
+    private readonly SortableBindingList<ResultRow> _rows = [];
     private WorkSession? _session;
     private IGeoIpResolver _geoIp = NullGeoIpResolver.Instance;
     private readonly WindowsProxyManager _proxyManager = new();
     private readonly SynchronizationContext _ui;
 
-    private readonly DataGridView _grid = new();
+    private readonly BufferedDataGridView _grid = new();
     private readonly StatusStrip _status = new();
     private readonly ToolStripStatusLabel _statusLabel = new();
+    private readonly ToolStripStatusLabel _countsLabel = new();
     private readonly ToolStripProgressBar _progress = new();
     private readonly ToolStripStatusLabel _percentLabel = new();
     private readonly RadioButton _httpRadio = new() { Text = "HTTP(S)", Checked = true, AutoSize = true };
@@ -160,26 +161,39 @@ public sealed class MainForm : Form
         _grid.BackgroundColor = Color.White;
         _grid.BorderStyle = BorderStyle.None;
         _grid.AutoGenerateColumns = false;
+        _grid.CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal;
+        _grid.GridColor = Color.FromArgb(232, 232, 232);
+        _grid.EnableHeadersVisualStyles = false;
+        _grid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(245, 246, 248);
+        _grid.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI Semibold", 9f);
+        _grid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
+        _grid.ColumnHeadersHeight = 28;
+        _grid.RowTemplate.Height = 24;
+        _grid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(0, 120, 215);
+        _grid.DefaultCellStyle.SelectionForeColor = Color.White;
         _grid.Columns.AddRange(
         [
             GridColumn(nameof(ResultRow.Proxy), "Proxy", 180),
             GridColumn(nameof(ResultRow.Country), "Country", 70),
             GridColumn(nameof(ResultRow.Anonymity), "Anonymity", 90),
             GridColumn(nameof(ResultRow.Protocol), "Type", 80),
-            GridColumn(nameof(ResultRow.LatencyMs), "Latency (ms)", 80),
+            GridColumn(nameof(ResultRow.LatencyMs), "Latency (ms)", 80, rightAlign: true),
             GridColumn(nameof(ResultRow.Auth), "Auth", 90),
             GridColumn(nameof(ResultRow.Detail), "Detail", 220)
         ]);
         _grid.DataSource = _rows;
         _grid.CellDoubleClick += (_, _) => CopySelected();
+        _grid.CellFormatting += Grid_CellFormatting;
         _grid.ContextMenuStrip = BuildGridMenu();
 
         _statusLabel.Spring = true;
         _statusLabel.TextAlign = ContentAlignment.MiddleLeft;
         _statusLabel.Text = "Ready.";
+        _countsLabel.BorderSides = ToolStripStatusLabelBorderSides.Left;
+        _countsLabel.BorderStyle = Border3DStyle.Etched;
         _progress.Width = 160;
         _percentLabel.Text = "0 %";
-        _status.Items.AddRange([_statusLabel, _progress, _percentLabel]);
+        _status.Items.AddRange([_statusLabel, _countsLabel, _progress, _percentLabel]);
         _status.Dock = DockStyle.Bottom;
 
         Controls.Add(_grid);
@@ -211,18 +225,42 @@ public sealed class MainForm : Form
         Controls.Add(menu);
     }
 
-    private static DataGridViewTextBoxColumn GridColumn(string property, string header, int width) => new()
+    private static DataGridViewTextBoxColumn GridColumn(string property, string header, int width, bool rightAlign = false)
     {
-        DataPropertyName = property,
-        HeaderText = header,
-        FillWeight = width,
-        MinimumWidth = Math.Min(width, 80)
-    };
+        var column = new DataGridViewTextBoxColumn
+        {
+            DataPropertyName = property,
+            HeaderText = header,
+            FillWeight = width,
+            MinimumWidth = Math.Min(width, 80),
+            SortMode = DataGridViewColumnSortMode.Automatic
+        };
+        if (rightAlign)
+            column.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
+        return column;
+    }
+
+    private void Grid_CellFormatting(object? sender, DataGridViewCellFormattingEventArgs e)
+    {
+        if (e.RowIndex < 0 || e.RowIndex >= _grid.Rows.Count)
+            return;
+        if (_grid.Rows[e.RowIndex].DataBoundItem is not ResultRow row)
+            return;
+
+        e.CellStyle.BackColor = row.AnonLevel switch
+        {
+            AnonymityLevel.Elite => Color.FromArgb(230, 244, 234),
+            AnonymityLevel.Anonymous => Color.FromArgb(255, 244, 229),
+            AnonymityLevel.Transparent => Color.FromArgb(253, 236, 234),
+            _ => Color.White
+        };
+    }
 
     private ContextMenuStrip BuildGridMenu()
     {
         var menu = new ContextMenuStrip();
         menu.Items.Add("Copy selected proxies", null, (_, _) => CopySelected());
+        menu.Items.Add("Select all", null, (_, _) => _grid.SelectAll());
         menu.Items.Add("Export results…", null, (_, _) => ExportResults());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Clear results", null, (_, _) =>
@@ -306,6 +344,14 @@ public sealed class MainForm : Form
             LoadProxies();
             e.Handled = true;
         }
+        else if (e.Control && e.KeyCode == Keys.A)
+        {
+            if (_grid.Focused)
+            {
+                _grid.SelectAll();
+                e.Handled = true;
+            }
+        }
     }
 
     private void EnsureSession()
@@ -327,7 +373,8 @@ public sealed class MainForm : Form
             Protocol = FormatProtocol(result.ConfirmedProtocol),
             LatencyMs = result.LatencyMs,
             Auth = ProxyAuth.Describe(result.AuthMethod),
-            Detail = result.IsAlive ? "" : FailureMessages.Describe(result.Failure, result.ErrorMessage)
+            Detail = result.IsAlive ? "" : FailureMessages.Describe(result.Failure, result.ErrorMessage),
+            AnonLevel = result.Anonymity
         });
         _btnExport.Enabled = true;
     }
@@ -345,6 +392,7 @@ public sealed class MainForm : Form
     private void ApplyProgress(ProgressSnapshot snap)
     {
         _statusLabel.Text = snap.Message;
+        _countsLabel.Text = FormatCounts(snap);
         _btnExport.Enabled = snap.Status is not (SessionStatus.Running or SessionStatus.Stopping) && _rows.Count > 0;
         if (snap.Total > 0)
         {
@@ -370,6 +418,20 @@ public sealed class MainForm : Form
         _concurrency.Enabled = !busy;
         _timeoutSec.Enabled = !busy;
         _judgeBox.Enabled = !busy;
+    }
+
+    private string FormatCounts(ProgressSnapshot snap)
+    {
+        if (snap.Kind == SessionKind.Scraping)
+            return $"Unique: {snap.UniqueProxies}";
+
+        if (_socksRadio.Checked)
+        {
+            var alive = snap.Socks4 + snap.Socks5 + snap.Socks4And5;
+            return $"Alive {alive}  •  S4 {snap.Socks4}  •  S5 {snap.Socks5}  •  S4/5 {snap.Socks4And5}";
+        }
+
+        return $"Alive {snap.Alive}  •  Elite {snap.Elite}  •  Anon {snap.Anonymous}  •  Transp {snap.Transparent}";
     }
 
     private void SetStatus(string text) => _statusLabel.Text = text;
@@ -620,5 +682,6 @@ public sealed class MainForm : Form
         public int LatencyMs { get; set; }
         public string Auth { get; set; } = "";
         public string Detail { get; set; } = "";
+        public AnonymityLevel AnonLevel { get; set; } = AnonymityLevel.Unknown;
     }
 }
