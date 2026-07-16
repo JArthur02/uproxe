@@ -101,29 +101,54 @@ public static partial class ProxyParser
     {
         proxy = null;
         var host = hostRaw.Trim().TrimStart('[').TrimEnd(']');
-        if (!IPAddress.TryParse(host, out var ip))
-            return false;
-
-        if (ip.AddressFamily is not (AddressFamily.InterNetwork or AddressFamily.InterNetworkV6))
-            return false;
-
-        // Reject obviously unusable targets unless they are loopback (useful for local tests).
-        if (IPAddress.IsLoopback(ip))
-        {
-            // allow
-        }
-        else if (IsUnusable(ip))
+        if (!IsValidHost(host, out var normalized))
             return false;
 
         if (!int.TryParse(portRaw, out var port) || port is < 1 or > 65535)
             return false;
 
-        // Normalize IPv4 textual form (drop leading zeros via IPAddress)
-        var normalized = ip.AddressFamily == AddressFamily.InterNetwork
-            ? ip.ToString()
-            : host;
-
         proxy = new ParsedProxy(normalized, port, protocol, user, pass);
+        return true;
+    }
+
+    private static bool IsValidHost(string host, out string normalized)
+    {
+        normalized = host;
+        if (string.IsNullOrWhiteSpace(host) || host.Length > 253)
+            return false;
+
+        if (IPAddress.TryParse(host, out var ip))
+        {
+            if (ip.AddressFamily is not (AddressFamily.InterNetwork or AddressFamily.InterNetworkV6))
+                return false;
+
+            if (!IPAddress.IsLoopback(ip) && IsUnusable(ip))
+                return false;
+
+            normalized = ip.AddressFamily == AddressFamily.InterNetwork ? ip.ToString() : host;
+            return true;
+        }
+
+        if (host.Contains("..", StringComparison.Ordinal) ||
+            host.StartsWith('.', StringComparison.Ordinal) ||
+            host.EndsWith('.', StringComparison.Ordinal))
+            return false;
+
+        var labels = host.Split('.');
+        if (labels.Length < 2)
+            return false;
+
+        foreach (var label in labels)
+        {
+            if (label.Length is < 1 or > 63)
+                return false;
+            if (label.StartsWith('-', StringComparison.Ordinal) || label.EndsWith('-', StringComparison.Ordinal))
+                return false;
+            if (label.Any(ch => !char.IsAsciiLetterOrDigit(ch) && ch != '-'))
+                return false;
+        }
+
+        normalized = host.ToLowerInvariant();
         return true;
     }
 

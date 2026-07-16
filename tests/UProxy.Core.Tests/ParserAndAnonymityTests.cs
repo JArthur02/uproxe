@@ -16,6 +16,8 @@ public class ProxyParserTests
     [InlineData("http://1.2.3.4:8080", true)]
     [InlineData("socks5://user:pass@1.2.3.4:1080", true)]
     [InlineData("[2001:db8::1]:8080", true)]
+    [InlineData("proxy.example.com:8080", true)]
+    [InlineData("bad_host.example:8080", false)]
     [InlineData("not-a-proxy", false)]
     public void TryParse_Validates(string input, bool expected)
     {
@@ -39,6 +41,15 @@ public class ProxyParserTests
         Assert.Contains(list, p => p.Host == "1.1.1.1" && p.Port == 80);
         Assert.Contains(list, p => p.Host == "2.2.2.2" && p.Port == 8080);
         Assert.DoesNotContain(list, p => p.Host.StartsWith("999"));
+    }
+
+    [Fact]
+    public void ExtractFromText_AcceptsHostnameLines()
+    {
+        var list = ProxyParser.ExtractFromText("proxy.example.com:8080\nhttps://edge.example.net:8443");
+
+        Assert.Contains(list, p => p.Host == "proxy.example.com" && p.Port == 8080);
+        Assert.Contains(list, p => p.Host == "edge.example.net" && p.Protocol == ProxyProtocol.Https);
     }
 
     [Fact]

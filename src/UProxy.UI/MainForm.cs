@@ -159,9 +159,20 @@ public sealed class MainForm : Form
         _grid.RowHeadersVisible = false;
         _grid.BackgroundColor = Color.White;
         _grid.BorderStyle = BorderStyle.None;
+        _grid.AutoGenerateColumns = false;
+        _grid.Columns.AddRange(
+        [
+            GridColumn(nameof(ResultRow.Proxy), "Proxy", 180),
+            GridColumn(nameof(ResultRow.Country), "Country", 70),
+            GridColumn(nameof(ResultRow.Anonymity), "Anonymity", 90),
+            GridColumn(nameof(ResultRow.Protocol), "Type", 80),
+            GridColumn(nameof(ResultRow.LatencyMs), "Latency", 70),
+            GridColumn(nameof(ResultRow.Auth), "Auth", 90),
+            GridColumn(nameof(ResultRow.Detail), "Detail", 220)
+        ]);
         _grid.DataSource = _rows;
-        _grid.Columns.Clear();
-        _grid.AutoGenerateColumns = true;
+        _grid.CellDoubleClick += (_, _) => CopySelected();
+        _grid.ContextMenuStrip = BuildGridMenu();
 
         _statusLabel.Spring = true;
         _statusLabel.TextAlign = ContentAlignment.MiddleLeft;
@@ -198,6 +209,31 @@ public sealed class MainForm : Form
         menu.Items.AddRange([file, tools, help]);
         MainMenuStrip = menu;
         Controls.Add(menu);
+    }
+
+    private static DataGridViewTextBoxColumn GridColumn(string property, string header, int width) => new()
+    {
+        DataPropertyName = property,
+        HeaderText = header,
+        FillWeight = width,
+        MinimumWidth = Math.Min(width, 80)
+    };
+
+    private ContextMenuStrip BuildGridMenu()
+    {
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("Copy selected proxies", null, (_, _) => CopySelected());
+        menu.Items.Add("Export results…", null, (_, _) => ExportResults());
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Clear results", null, (_, _) =>
+        {
+            EnsureSession();
+            _session!.ClearResults();
+            _rows.Clear();
+            UpdateTitle();
+            SetStatus("Results cleared.");
+        });
+        return menu;
     }
 
     private static Label Lbl(string text) => new()
@@ -291,6 +327,7 @@ public sealed class MainForm : Form
             Auth = ProxyAuth.Describe(result.AuthMethod),
             Detail = result.IsAlive ? "" : FailureMessages.Describe(result.Failure, result.ErrorMessage)
         });
+        _btnExport.Enabled = true;
     }
 
     private static string FormatProtocol(ProxyProtocol p) => p switch
@@ -306,6 +343,7 @@ public sealed class MainForm : Form
     private void ApplyProgress(ProgressSnapshot snap)
     {
         _statusLabel.Text = snap.Message;
+        _btnExport.Enabled = snap.Status is not (SessionStatus.Running or SessionStatus.Stopping) && _rows.Count > 0;
         if (snap.Total > 0)
         {
             var pct = (int)Math.Round(100.0 * snap.Completed / snap.Total);
@@ -322,11 +360,14 @@ public sealed class MainForm : Form
         _btnLoad.Enabled = !busy;
         _btnScrape.Enabled = !busy;
         _btnCheck.Enabled = !busy;
-        _btnExport.Enabled = !busy;
+        _btnExport.Enabled = !busy && _rows.Count > 0;
         _btnSettings.Enabled = !busy;
         _btnStop.Enabled = busy;
         _httpRadio.Enabled = !busy;
         _socksRadio.Enabled = !busy;
+        _concurrency.Enabled = !busy;
+        _timeoutSec.Enabled = !busy;
+        _judgeBox.Enabled = !busy;
     }
 
     private void SetStatus(string text) => _statusLabel.Text = text;

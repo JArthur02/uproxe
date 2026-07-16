@@ -84,8 +84,22 @@ public sealed class WorkSession : IAsyncDisposable
 
             var channel = Channel.CreateBounded<string>(new BoundedChannelOptions(Math.Max(8, _settings.Concurrency))
             {
-                FullMode = BoundedChannelFullMode.Wait
+                FullMode = BoundedChannelFullMode.Wait,
+                SingleWriter = true
             });
+
+            using var handler = new System.Net.Http.SocketsHttpHandler
+            {
+                AutomaticDecompression = System.Net.DecompressionMethods.All,
+                AllowAutoRedirect = true,
+                UseProxy = false,
+                PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+            };
+            using var client = new HttpClient(handler)
+            {
+                Timeout = TimeSpan.FromMilliseconds(Math.Max(_settings.TimeoutMs, 12_000))
+            };
+            client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", _settings.UserAgent);
 
             var producer = Task.Run(async () =>
             {
@@ -99,7 +113,7 @@ public sealed class WorkSession : IAsyncDisposable
             {
                 await foreach (var url in channel.Reader.ReadAllAsync(ct).ConfigureAwait(false))
                 {
-                    var (result, proxies) = await FetchAndParseAsync(url, protocol, ct).ConfigureAwait(false);
+                    var (result, proxies) = await FetchAndParseAsync(client, url, protocol, ct).ConfigureAwait(false);
                     var newUnique = 0;
                     lock (_proxyGate)
                     {
@@ -289,6 +303,7 @@ public sealed class WorkSession : IAsyncDisposable
     }
 
     private async Task<(ScrapeSourceResult Result, List<ParsedProxy> Proxies)> FetchAndParseAsync(
+        HttpClient client,
         string url,
         ProxyProtocol protocol,
         CancellationToken ct)
@@ -296,16 +311,6 @@ public sealed class WorkSession : IAsyncDisposable
         var sw = System.Diagnostics.Stopwatch.StartNew();
         try
         {
-            using var handler = new System.Net.Http.SocketsHttpHandler
-            {
-                AutomaticDecompression = System.Net.DecompressionMethods.All,
-                UseProxy = false
-            };
-            using var client = new HttpClient(handler)
-            {
-                Timeout = TimeSpan.FromMilliseconds(Math.Max(_settings.TimeoutMs, 12_000))
-            };
-            client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", _settings.UserAgent);
             using var response = await client.GetAsync(url, ct).ConfigureAwait(false);
             var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             sw.Stop();
