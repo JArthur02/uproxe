@@ -40,7 +40,6 @@ public sealed class MainForm : Form
     private readonly Button _btnSettings = new() { Text = "Settings", Width = 80 };
     private readonly Button _btnSetProxy = new() { Text = "Set System Proxy…", AutoSize = true };
     private readonly Button _btnResetProxy = new() { Text = "Emergency Reset", AutoSize = true };
-    private readonly Label _title = new();
 
     public MainForm()
     {
@@ -106,25 +105,11 @@ public sealed class MainForm : Form
         Font = new Font("Segoe UI", 9f);
         BackColor = Color.White;
 
-        _title.Text = "μProxy Tool";
-        _title.Font = new Font("Segoe UI Semibold", 16f);
-        _title.ForeColor = Color.FromArgb(60, 60, 60);
-        _title.AutoSize = true;
-        _title.Location = new Point(12, 10);
-
-        var version = new Label
-        {
-            Text = "2.0",
-            AutoSize = true,
-            ForeColor = Color.Gray,
-            Location = new Point(160, 18)
-        };
-
         var top = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
-            Height = 78,
-            Padding = new Padding(8, 40, 8, 4),
+            Height = 44,
+            Padding = new Padding(8, 8, 8, 4),
             WrapContents = false,
             AutoSize = false
         };
@@ -201,8 +186,6 @@ public sealed class MainForm : Form
         Controls.Add(actions);
         Controls.Add(top);
         Controls.Add(_status);
-        Controls.Add(_title);
-        Controls.Add(version);
 
         var menu = new MenuStrip();
         var file = new ToolStripMenuItem("File");
