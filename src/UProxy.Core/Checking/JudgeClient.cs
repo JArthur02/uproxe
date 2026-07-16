@@ -26,10 +26,12 @@ public sealed class JudgeClient
 
         foreach (var judgeUrl in judges)
         {
+            // Only dispose handlers we create ourselves; a caller-supplied override
+            // must survive across judge iterations (and be disposed by the caller).
+            var handler = _handlerOverride ?? CreateProxyHandler(proxy);
             try
             {
-                using var handler = _handlerOverride ?? CreateProxyHandler(proxy);
-                using var client = new HttpClient(handler, disposeHandler: _handlerOverride is null)
+                using var client = new HttpClient(handler, disposeHandler: false)
                 {
                     Timeout = TimeSpan.FromMilliseconds(_settings.TimeoutMs)
                 };
@@ -88,6 +90,11 @@ public sealed class JudgeClient
             {
                 lastFailure = FailureReason.UnknownError;
                 lastError = ex.Message;
+            }
+            finally
+            {
+                if (_handlerOverride is null)
+                    handler.Dispose();
             }
         }
 
@@ -169,11 +176,11 @@ public sealed class JudgeClient
 
     private IEnumerable<string> EnumerateJudges()
     {
-        yield return _settings.JudgeUrl;
-        foreach (var url in _settings.FallbackJudgeUrls)
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var url in new[] { _settings.JudgeUrl }.Concat(_settings.FallbackJudgeUrls))
         {
-            if (!string.Equals(url, _settings.JudgeUrl, StringComparison.OrdinalIgnoreCase))
-                yield return url;
+            if (string.IsNullOrWhiteSpace(url)) continue;
+            if (seen.Add(url.Trim().TrimEnd('/'))) yield return url;
         }
     }
 
