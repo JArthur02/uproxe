@@ -54,10 +54,13 @@ Settings are stored under `%LocalAppData%\uProxyTool\settings.json`.
 - Default judge: `http://azenv.net` (still returns classic `REMOTE_ADDR` / `HTTP_*` bodies). Configurable; fallbacks in settings.
 - A proxy is marked alive only if the judge body looks like azenv (not a captive portal).
 - Anonymity: Transparent / Anonymous / Elite with corrected header rules vs 1.81.
-- HTTPS probe uses Google’s `generate_204` connectivity check through the proxy.
+- **Reachability split** (Proxifier-style Test 1 vs Test 2): a proxy that answers TCP but cannot reach the target is reported as `TargetUnreachableThroughProxy`, distinct from a proxy that refuses/times out the connection.
+- **Connect latency** (Test 3): a dedicated `Connect (ms)` metric measures the pure TCP round-trip to the proxy, separate from the full judge round-trip (`Latency (ms)`); both appear in the grid and exports.
+- **HTTPS probe** issues a raw `CONNECT` and reads the tunnel status: `200` confirms HTTPS, `403/405` → `HttpsConnectForbidden` (proxy forbids CONNECT to the port, e.g. Squid `SSL_ports` / ISA), `407` → auth required.
 - SOCKS4/5: full handshake + HTTP response through the tunnel (not merely `Connected`).
 - **Fake-IP DNS** (Proxifier-compatible `127.8.x.x` placeholders) + SOCKS4a / remote hostname resolve through the proxy.
 - **Embedded auth**: HTTP Basic (`Proxy-Authorization`), SOCKS5 user/pass, SOCKS4 userid; NTLM is detected on 407 but not sent by default (privacy).
+- **User-Agent presets**: selectable in Settings (μProxy default, Chrome, Firefox, Internet Explorer 11) for judges/targets that block non-browser agents.
 
 
 ## Hotkeys
