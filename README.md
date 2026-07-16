@@ -38,7 +38,7 @@ Shipped next to the UI:
 
 - `Data/Source/HttpSource.txt` — HTTP(S) scrape URLs (one per line; `#` comments)
 - `Data/Source/SocksSource.txt` — SOCKS scrape URLs
-- `Data/Country.mmdb` — MaxMind GeoLite2-Country (local only; no ip2c.org)
+- `Data/Country.mmdb` — MaxMind GeoLite2-Country (local only; no ip2c.org). Bundled build date ~2026-07-10; MaxMind’s GeoLite EULA asks that you refresh it periodically (official updates require a free MaxMind license key).
 
 Settings are stored under `%LocalAppData%\uProxyTool\settings.json`.
 
