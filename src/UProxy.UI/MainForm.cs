@@ -31,24 +31,30 @@ public sealed class MainForm : Form
     private readonly RadioButton _socksRadio = new() { Text = "SOCKS", AutoSize = true };
     private readonly NumericUpDown _concurrency = new() { Minimum = 1, Maximum = 256, Value = 48, Width = 60 };
     private readonly NumericUpDown _timeoutSec = new() { Minimum = 1, Maximum = 120, Value = 10, Width = 60 };
-    private readonly TextBox _judgeBox = new() { Width = 280 };
-    private readonly Button _btnLoad = new() { Text = "Load", Width = 80 };
-    private readonly Button _btnScrape = new() { Text = "Scrape", Width = 80 };
-    private readonly Button _btnCheck = new() { Text = "Check", Width = 80 };
-    private readonly Button _btnStop = new() { Text = "Stop", Width = 80, Enabled = false };
-    private readonly Button _btnExport = new() { Text = "Export", Width = 80 };
-    private readonly Button _btnSettings = new() { Text = "Settings", Width = 80 };
+    private readonly TextBox _judgeBox = new() { MinimumSize = new Size(160, 0), Width = 220 };
+    private readonly Button _btnLoad = new() { Text = "Load", AutoSize = true };
+    private readonly Button _btnScrape = new() { Text = "Scrape", AutoSize = true };
+    private readonly Button _btnCheck = new() { Text = "Check", AutoSize = true };
+    private readonly Button _btnStop = new() { Text = "Stop", AutoSize = true, Enabled = false };
+    private readonly Button _btnExport = new() { Text = "Export", AutoSize = true };
+    private readonly Button _btnSettings = new() { Text = "Settings", AutoSize = true };
     private readonly Button _btnSetProxy = new() { Text = "Set System Proxy…", AutoSize = true };
     private readonly Button _btnResetProxy = new() { Text = "Emergency Reset", AutoSize = true };
+    private FlowLayoutPanel? _topBar;
+    private FlowLayoutPanel? _actionBar;
 
     public MainForm()
     {
         _ui = SynchronizationContext.Current ?? new SynchronizationContext();
-        _appDirectory = AppContext.BaseDirectory;
+        _appDirectory = ResolveAppDirectory();
         _settingsPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "uProxyTool",
             "settings.json");
+
+        // Design for 96 DPI; WinForms scales controls when PerMonitorV2 kicks in.
+        AutoScaleMode = AutoScaleMode.Dpi;
+        AutoScaleDimensions = new SizeF(96F, 96F);
 
         _settings = AppSettings.Load(_settingsPath);
         ResolvePaths();
@@ -57,24 +63,75 @@ public sealed class MainForm : Form
         BuildUi();
         WireEvents();
         UpdateTitle();
+        ReportGeoIpStatus();
+    }
+
+    /// <summary>
+    /// Directory that holds the shipped <c>Data/</c> folder. For single-file publish this is the
+    /// folder containing the .exe (not a temp extract dir), so GeoIP/sources stay findable after moves.
+    /// </summary>
+    private static string ResolveAppDirectory()
+    {
+        try
+        {
+            var exe = Environment.ProcessPath;
+            if (!string.IsNullOrEmpty(exe))
+            {
+                var dir = Path.GetDirectoryName(exe);
+                if (!string.IsNullOrEmpty(dir) && Directory.Exists(Path.Combine(dir, "Data")))
+                    return dir;
+            }
+        }
+        catch { /* fall through */ }
+
+        return AppContext.BaseDirectory;
     }
 
     private void ResolvePaths()
     {
-        _settings.HttpSourcesPath = MakeAbsolute(_settings.HttpSourcesPath);
-        _settings.SocksSourcesPath = MakeAbsolute(_settings.SocksSourcesPath);
-        _settings.GeoIpDatabasePath = MakeAbsolute(_settings.GeoIpDatabasePath);
+        _settings.HttpSourcesPath = AppDataPaths.ResolveExistingOrDefault(
+            _settings.HttpSourcesPath,
+            Path.Combine("Data", "Source", "HttpSource.txt"),
+            _appDirectory,
+            AppContext.BaseDirectory,
+            Environment.CurrentDirectory);
+        _settings.SocksSourcesPath = AppDataPaths.ResolveExistingOrDefault(
+            _settings.SocksSourcesPath,
+            Path.Combine("Data", "Source", "SocksSource.txt"),
+            _appDirectory,
+            AppContext.BaseDirectory,
+            Environment.CurrentDirectory);
+        _settings.GeoIpDatabasePath = AppDataPaths.ResolveExistingOrDefault(
+            _settings.GeoIpDatabasePath,
+            Path.Combine("Data", "Country.mmdb"),
+            _appDirectory,
+            AppContext.BaseDirectory,
+            Environment.CurrentDirectory);
     }
-
-    private string MakeAbsolute(string path) =>
-        Path.IsPathRooted(path) ? path : Path.GetFullPath(Path.Combine(_appDirectory, path));
 
     private void InitGeoIp()
     {
         _geoIp.Dispose();
-        _geoIp = File.Exists(_settings.GeoIpDatabasePath)
-            ? new MaxMindGeoIpResolver(_settings.GeoIpDatabasePath)
+        var path = AppDataPaths.ResolveExistingOrDefault(
+            _settings.GeoIpDatabasePath,
+            Path.Combine("Data", "Country.mmdb"),
+            _appDirectory,
+            AppContext.BaseDirectory,
+            Environment.CurrentDirectory);
+        _settings.GeoIpDatabasePath = path;
+        _geoIp = File.Exists(path)
+            ? new MaxMindGeoIpResolver(path)
             : NullGeoIpResolver.Instance;
+    }
+
+    private void ReportGeoIpStatus()
+    {
+        if (_geoIp is NullGeoIpResolver)
+        {
+            SetStatus(
+                "GeoIP database not found — Country will show Unknown. " +
+                $"Expected: {Path.Combine(_appDirectory, "Data", "Country.mmdb")}");
+        }
     }
 
     private void ApplySettingsToUi()
@@ -92,48 +149,60 @@ public sealed class MainForm : Form
         _settings.TimeoutMs = (int)_timeoutSec.Value * 1000;
         _settings.JudgeUrl = _judgeBox.Text.Trim();
         _settings.ProxyTypeMode = _socksRadio.Checked ? 1 : 0;
+        // Store portable relative paths when possible so moving the app folder doesn't break GeoIP.
+        _settings.HttpSourcesPath = AppDataPaths.ToPortable(_settings.HttpSourcesPath, _appDirectory);
+        _settings.SocksSourcesPath = AppDataPaths.ToPortable(_settings.SocksSourcesPath, _appDirectory);
+        _settings.GeoIpDatabasePath = AppDataPaths.ToPortable(_settings.GeoIpDatabasePath, _appDirectory);
         _settings.Save(_settingsPath);
+        ResolvePaths();
     }
 
     private void BuildUi()
     {
         Text = "μProxy Tool 2.0";
-        Width = 980;
-        Height = 640;
+        Width = 1100;
+        Height = 680;
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new Size(760, 480);
+        MinimumSize = new Size(720, 480);
         Font = new Font("Segoe UI", 9f);
         BackColor = Color.White;
 
-        var top = new FlowLayoutPanel
+        _topBar = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
-            Height = 44,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = true,
             Padding = new Padding(8, 8, 8, 4),
-            WrapContents = false,
-            AutoSize = false
+            FlowDirection = FlowDirection.LeftToRight
         };
-
-        top.Controls.AddRange(
+        _topBar.Controls.AddRange(
         [
             Lbl("Mode:"), _httpRadio, _socksRadio,
-            Lbl("  Workers:"), _concurrency,
-            Lbl("  Timeout(s):"), _timeoutSec,
-            Lbl("  Judge:"), _judgeBox
+            Lbl("Workers:"), _concurrency,
+            Lbl("Timeout(s):"), _timeoutSec,
+            Lbl("Judge:"), _judgeBox
         ]);
 
-        var actions = new FlowLayoutPanel
+        _actionBar = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
-            Height = 40,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = true,
             Padding = new Padding(8, 4, 8, 4),
-            WrapContents = false
+            FlowDirection = FlowDirection.LeftToRight
         };
-        actions.Controls.AddRange(
-        [
-            _btnLoad, _btnScrape, _btnCheck, _btnStop, _btnExport, _btnSettings,
-            _btnSetProxy, _btnResetProxy
-        ]);
+        foreach (var btn in new[]
+                 {
+                     _btnLoad, _btnScrape, _btnCheck, _btnStop, _btnExport, _btnSettings,
+                     _btnSetProxy, _btnResetProxy
+                 })
+        {
+            btn.Margin = new Padding(2);
+            btn.Padding = new Padding(8, 2, 8, 2);
+            _actionBar.Controls.Add(btn);
+        }
 
         _grid.Dock = DockStyle.Fill;
         _grid.AllowUserToAddRows = false;
@@ -151,21 +220,21 @@ public sealed class MainForm : Form
         _grid.EnableHeadersVisualStyles = false;
         _grid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(245, 246, 248);
         _grid.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI Semibold", 9f);
-        _grid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
-        _grid.ColumnHeadersHeight = 28;
+        _grid.ColumnHeadersDefaultCellStyle.WrapMode = DataGridViewTriState.False;
+        _grid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
         _grid.RowTemplate.Height = 24;
         _grid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(0, 120, 215);
         _grid.DefaultCellStyle.SelectionForeColor = Color.White;
         _grid.Columns.AddRange(
         [
-            GridColumn(nameof(ResultRow.Proxy), "Proxy", 180),
-            GridColumn(nameof(ResultRow.Country), "Country", 70),
-            GridColumn(nameof(ResultRow.Anonymity), "Anonymity", 90),
-            GridColumn(nameof(ResultRow.Protocol), "Type", 80),
-            GridColumn(nameof(ResultRow.ConnectMs), "Connect (ms)", 80, rightAlign: true),
-            GridColumn(nameof(ResultRow.LatencyMs), "Latency (ms)", 80, rightAlign: true),
-            GridColumn(nameof(ResultRow.Auth), "Auth", 90),
-            GridColumn(nameof(ResultRow.Detail), "Detail", 220)
+            GridColumn(nameof(ResultRow.Proxy), "Proxy", 160, minWidth: 110),
+            GridColumn(nameof(ResultRow.Country), "Country", 90, minWidth: 72),
+            GridColumn(nameof(ResultRow.Anonymity), "Anonymity", 80, minWidth: 72),
+            GridColumn(nameof(ResultRow.Protocol), "Type", 70, minWidth: 60),
+            GridColumn(nameof(ResultRow.ConnectMs), "Connect", 70, rightAlign: true, minWidth: 60),
+            GridColumn(nameof(ResultRow.LatencyMs), "Latency", 70, rightAlign: true, minWidth: 60),
+            GridColumn(nameof(ResultRow.Auth), "Auth", 70, minWidth: 56),
+            GridColumn(nameof(ResultRow.Detail), "Detail", 160, minWidth: 80)
         ]);
         _grid.DataSource = _rows;
         _grid.CellDoubleClick += (_, _) => CopySelected();
@@ -177,14 +246,15 @@ public sealed class MainForm : Form
         _statusLabel.Text = "Ready.";
         _countsLabel.BorderSides = ToolStripStatusLabelBorderSides.Left;
         _countsLabel.BorderStyle = Border3DStyle.Etched;
-        _progress.Width = 160;
+        _progress.AutoSize = false;
+        _progress.Width = 140;
         _percentLabel.Text = "0 %";
         _status.Items.AddRange([_statusLabel, _countsLabel, _progress, _percentLabel]);
         _status.Dock = DockStyle.Bottom;
 
         Controls.Add(_grid);
-        Controls.Add(actions);
-        Controls.Add(top);
+        Controls.Add(_actionBar);
+        Controls.Add(_topBar);
         Controls.Add(_status);
 
         var menu = new MenuStrip();
@@ -210,15 +280,17 @@ public sealed class MainForm : Form
         Controls.Add(menu);
     }
 
-    private static DataGridViewTextBoxColumn GridColumn(string property, string header, int width, bool rightAlign = false)
+    private static DataGridViewTextBoxColumn GridColumn(
+        string property, string header, int fillWeight, bool rightAlign = false, int minWidth = 60)
     {
         var column = new DataGridViewTextBoxColumn
         {
             DataPropertyName = property,
             HeaderText = header,
-            FillWeight = width,
-            MinimumWidth = Math.Min(width, 80),
-            SortMode = DataGridViewColumnSortMode.Automatic
+            FillWeight = fillWeight,
+            MinimumWidth = minWidth,
+            SortMode = DataGridViewColumnSortMode.Automatic,
+            Resizable = DataGridViewTriState.True
         };
         if (rightAlign)
             column.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
@@ -358,7 +430,7 @@ public sealed class MainForm : Form
             Protocol = FormatProtocol(result.ConfirmedProtocol),
             ConnectMs = result.ConnectMs ?? 0,
             LatencyMs = result.LatencyMs,
-            Auth = ProxyAuth.Describe(result.AuthMethod),
+            Auth = FormatAuthShort(result.AuthMethod),
             Detail = result.IsAlive ? "" : FailureMessages.Describe(result.Failure, result.ErrorMessage),
             AnonLevel = result.Anonymity
         });
@@ -373,6 +445,16 @@ public sealed class MainForm : Form
         ProxyProtocol.Socks5 => "Socks 5",
         ProxyProtocol.Socks4And5 => "Socks 4/5",
         _ => p.ToString()
+    };
+
+    private static string FormatAuthShort(ProxyAuthMethod method) => method switch
+    {
+        ProxyAuthMethod.None => "No",
+        ProxyAuthMethod.Basic => "Basic",
+        ProxyAuthMethod.SocksUserPass => "Yes",
+        ProxyAuthMethod.Socks4UserId => "UserID",
+        ProxyAuthMethod.NtlmRequired => "NTLM",
+        _ => method.ToString()
     };
 
     private void ApplyProgress(ProgressSnapshot snap)
@@ -391,6 +473,20 @@ public sealed class MainForm : Form
         UpdateTitle(snap.UniqueProxies, snap.Alive);
     }
 
+    private string FormatCounts(ProgressSnapshot snap)
+    {
+        if (snap.Kind == SessionKind.Scraping)
+            return $"Unique: {snap.UniqueProxies}";
+
+        if (_socksRadio.Checked)
+        {
+            var alive = snap.Socks4 + snap.Socks5 + snap.Socks4And5;
+            return $"Alive {alive}  •  S4 {snap.Socks4}  •  S5 {snap.Socks5}  •  S4/5 {snap.Socks4And5}";
+        }
+
+        return $"Alive {snap.Alive}  •  Elite {snap.Elite}  •  Anon {snap.Anonymous}  •  Transp {snap.Transparent}";
+    }
+
     private void SetBusy(bool busy)
     {
         _btnLoad.Enabled = !busy;
@@ -404,20 +500,6 @@ public sealed class MainForm : Form
         _concurrency.Enabled = !busy;
         _timeoutSec.Enabled = !busy;
         _judgeBox.Enabled = !busy;
-    }
-
-    private string FormatCounts(ProgressSnapshot snap)
-    {
-        if (snap.Kind == SessionKind.Scraping)
-            return $"Unique: {snap.UniqueProxies}";
-
-        if (_socksRadio.Checked)
-        {
-            var alive = snap.Socks4 + snap.Socks5 + snap.Socks4And5;
-            return $"Alive {alive}  •  S4 {snap.Socks4}  •  S5 {snap.Socks5}  •  S4/5 {snap.Socks4And5}";
-        }
-
-        return $"Alive {snap.Alive}  •  Elite {snap.Elite}  •  Anon {snap.Anonymous}  •  Transp {snap.Transparent}";
     }
 
     private void SetStatus(string text) => _statusLabel.Text = text;
@@ -490,6 +572,8 @@ public sealed class MainForm : Form
     {
         PersistSettingsFromUi();
         InitGeoIp();
+        // Recreate session so it picks up a freshly resolved GeoIP database.
+        RecreateSessionPreservingState();
         EnsureSession();
 
         if (_session!.Proxies.Count == 0)
@@ -526,6 +610,19 @@ public sealed class MainForm : Form
         }
     }
 
+    private void RecreateSessionPreservingState()
+    {
+        if (_session is null)
+            return;
+        var proxies = _session.Proxies.ToList();
+        _ = _session.DisposeAsync();
+        _session = null;
+        EnsureSession();
+        _session!.ClearProxies();
+        foreach (var p in proxies)
+            _session.Proxies.Add(p);
+    }
+
     private void ExportResults()
     {
         EnsureSession();
@@ -550,8 +647,8 @@ public sealed class MainForm : Form
             ApplySettingsToUi();
             ResolvePaths();
             InitGeoIp();
+            ReportGeoIpStatus();
             _settings.Save(_settingsPath);
-            // recreate session with new settings/geoip
             if (_session is not null)
             {
                 var proxies = _session.Proxies.ToList();
@@ -579,7 +676,6 @@ public sealed class MainForm : Form
     {
         if (_session is null || _session.Proxies.Count == 0)
             return null;
-        // Include credentials so embedded user:pass proxies are scanned for leaked secrets.
         return string.Join(Environment.NewLine,
             _session.Proxies.Select(p => p.ToExportString(includeCredentials: true)));
     }
@@ -643,11 +739,10 @@ public sealed class MainForm : Form
             }
             else
             {
-                // Still clear ProxyEnable as a last resort (user-requested emergency).
                 var snap = _proxyManager.Capture();
                 snap.ProxyEnable = 0;
                 snap.ProxyServer = "";
-                _proxyManager.SaveBackup(snap); // so Restore path is consistent
+                _proxyManager.SaveBackup(snap);
                 _proxyManager.Restore(snap);
                 _proxyManager.ClearBackup();
                 MessageBox.Show("System proxy disabled (no prior backup found).", "μProxy Tool",
