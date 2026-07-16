@@ -211,6 +211,7 @@ public sealed class MainForm : Form
         file.DropDownItems.Add("Exit", null, (_, _) => Close());
         var tools = new ToolStripMenuItem("Tools");
         tools.DropDownItems.Add("Settings…", null, (_, _) => OpenSettings());
+        tools.DropDownItems.Add("Scan for secrets (TruffleHog)…", null, (_, _) => OpenSecretScanner());
         tools.DropDownItems.Add("Emergency Reset System Proxy", null, (_, _) => EmergencyReset());
         var help = new ToolStripMenuItem("Help");
         help.DropDownItems.Add("About μProxy Tool 2.0", null, (_, _) =>
@@ -580,6 +581,22 @@ public sealed class MainForm : Form
                     _session.Results.Add(r);
             }
         }
+    }
+
+    private void OpenSecretScanner()
+    {
+        PersistSettingsFromUi();
+        using var form = new SecretScanForm(_settings, GetLoadedProxiesText);
+        form.ShowDialog(this);
+    }
+
+    private string? GetLoadedProxiesText()
+    {
+        if (_session is null || _session.Proxies.Count == 0)
+            return null;
+        // Include credentials so embedded user:pass proxies are scanned for leaked secrets.
+        return string.Join(Environment.NewLine,
+            _session.Proxies.Select(p => p.ToExportString(includeCredentials: true)));
     }
 
     private void SetSystemProxyOptIn()
