@@ -130,8 +130,8 @@ public static partial class ProxyParser
         }
 
         if (host.Contains("..", StringComparison.Ordinal) ||
-            host.StartsWith('.', StringComparison.Ordinal) ||
-            host.EndsWith('.', StringComparison.Ordinal))
+            host.StartsWith('.') ||
+            host.EndsWith('.'))
             return false;
 
         var labels = host.Split('.');
@@ -142,11 +142,17 @@ public static partial class ProxyParser
         {
             if (label.Length is < 1 or > 63)
                 return false;
-            if (label.StartsWith('-', StringComparison.Ordinal) || label.EndsWith('-', StringComparison.Ordinal))
+            if (label.StartsWith('-') || label.EndsWith('-'))
                 return false;
             if (label.Any(ch => !char.IsAsciiLetterOrDigit(ch) && ch != '-'))
                 return false;
         }
+
+        // A hostname's top-level label must not be all-numeric; otherwise a malformed
+        // dotted-quad that failed IP parsing (e.g. 256.1.1.1 / 999.1.1.1) would be
+        // mistaken for a valid host.
+        if (labels[^1].All(char.IsAsciiDigit))
+            return false;
 
         normalized = host.ToLowerInvariant();
         return true;
