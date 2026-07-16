@@ -1,0 +1,4 @@
+# HTTP(S) proxy list sources (one URL per line)
+# Lines starting with # ; // are comments
+https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt
+https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt

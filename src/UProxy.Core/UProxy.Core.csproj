@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>UProxy.Core</RootNamespace>
+    <AssemblyName>UProxy.Core</AssemblyName>
+    <Description>μProxy Tool core — scraping, checking, export (UI-independent)</Description>
+    <Version>2.0.0</Version>
+    <Authors>μProxy Tool</Authors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MaxMind.GeoIP2" Version="6.0.0" />
+  </ItemGroup>
+
+</Project>
