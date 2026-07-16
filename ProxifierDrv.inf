@@ -1,0 +1,76 @@
+;
+; ProxifierDrv.inf
+;
+
+[Version]
+	Signature	= "$WINDOWS NT$"
+	Class		= WFPCALLOUTS
+	ClassGuid	= {57465043-616C-6C6F-7574-5F636C617373}
+	Provider	= %ProviderString%
+	CatalogFile	= ProxifierDrv.cat
+    DriverVer = 08/28/2023,18.49.7.349
+
+[SourceDisksNames]
+   1 = %ProxifierDrvDisk%,,,""
+
+[SourceDisksFiles]
+   ProxifierDrv.sys = 1,,
+
+[DestinationDirs]
+    DefaultDestDir      = 12                                            ; %WinDir%\System32\Drivers
+    ProxifierDrv.DriverFiles = 12                                       ; %WinDir%\System32\Drivers
+
+[DefaultInstall.ntx86]
+    OptionDesc = %ProxifierDrvServiceDesc%
+    CopyFiles  = ProxifierDrv.DriverFiles
+
+[DefaultInstall.ntamd64]
+    OptionDesc = %ProxifierDrvServiceDesc%
+    CopyFiles  = ProxifierDrv.DriverFiles
+
+[DefaultInstall.ntarm64]
+    OptionDesc = %ProxifierDrvServiceDesc%
+    CopyFiles  = ProxifierDrv.DriverFiles
+
+[DefaultInstall.ntx86.Services]
+    AddService = %ProxifierDrvServiceName%,0x00000800,ProxifierDrv.Service ;0x00000800 - SPSVCSINST_STARTSERVICE
+[DefaultUninstall.ntx86]
+    LegacyUninstall=1
+[DefaultUninstall.ntx86.Services]
+	LegacyUninstall=1
+    DelService = %ProxifierDrvServiceName%,0x200                        ; SPSVCINST_STOPSERVICE
+
+[DefaultInstall.ntamd64.Services]
+    AddService = %ProxifierDrvServiceName%,0x00000800,ProxifierDrv.Service ;0x00000800 - SPSVCSINST_STARTSERVICE
+[DefaultUninstall.ntamd64]
+    LegacyUninstall=1
+[DefaultUninstall.ntamd64.Services]
+	LegacyUninstall=1
+    DelService = %ProxifierDrvServiceName%,0x200                        ; SPSVCINST_STOPSERVICE
+
+[DefaultInstall.ntarm64.Services]
+    AddService = %ProxifierDrvServiceName%,0x00000800,ProxifierDrv.Service ;0x00000800 - SPSVCSINST_STARTSERVICE
+[DefaultUninstall.ntarm64]
+    LegacyUninstall=1
+[DefaultUninstall.ntarm64.Services]
+	LegacyUninstall=1
+    DelService = %ProxifierDrvServiceName%,0x200                        ; SPSVCINST_STOPSERVICE
+
+[ProxifierDrv.DriverFiles]
+    ProxifierDrv.sys,,,0x00000004                                       ; COPYFLG_NOVERSIONCHECK
+
+[ProxifierDrv.Service]
+    DisplayName   = %ProxifierDrvServiceName%
+    Description   = %ProxifierDrvServiceDesc%
+    ServiceType   = 1													; SERVICE_KERNEL_DRIVER
+    StartType     = 2													; 2=SERVICE_AUTO_START ; 3=SERVICE_DEMAND_START
+    ErrorControl  = 1													; SERVICE_ERROR_NORMAL
+    ServiceBinary = %12%\ProxifierDrv.sys                               ; %WinDir%\System32\Drivers\ProxifierDrv.sys
+	LoadOrderGroup = Extended Base
+	Dependencies	= BFE
+
+[Strings]
+    ProviderString     = "VentoByte SL"
+    ProxifierDrvDisk        = "ProxifierDrv Installation Disk"
+    ProxifierDrvServiceDesc = "ProxifierDrv Callout Driver"
+    ProxifierDrvServiceName = "ProxifierDrv"
