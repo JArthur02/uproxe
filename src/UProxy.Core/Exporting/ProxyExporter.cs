@@ -72,7 +72,7 @@ public static class ProxyExporter
         var tmp = path + ".tmp";
         await using (var writer = new StreamWriter(tmp, false, new UTF8Encoding(false)))
         {
-            await writer.WriteLineAsync("proxy,protocol,anonymity,country,latency_ms,auth,remote_dns,checked_at_utc,failure").ConfigureAwait(false);
+            await writer.WriteLineAsync("proxy,protocol,anonymity,country,connect_ms,latency_ms,auth,remote_dns,checked_at_utc,failure").ConfigureAwait(false);
             foreach (var r in filtered)
             {
                 ct.ThrowIfCancellationRequested();
@@ -81,6 +81,7 @@ public static class ProxyExporter
                     Csv(r.ConfirmedProtocol.ToString()),
                     Csv(r.Anonymity.ToString()),
                     Csv(r.Country),
+                    (r.ConnectMs ?? 0).ToString(),
                     r.LatencyMs.ToString(),
                     Csv(r.AuthMethod.ToString()),
                     r.UsedRemoteDns ? "1" : "0",
@@ -106,6 +107,7 @@ public static class ProxyExporter
             protocol = r.ConfirmedProtocol.ToString(),
             anonymity = r.Anonymity.ToString(),
             country = r.Country,
+            connectMs = r.ConnectMs,
             latencyMs = r.LatencyMs,
             auth = r.AuthMethod.ToString(),
             usedRemoteDns = r.UsedRemoteDns,
