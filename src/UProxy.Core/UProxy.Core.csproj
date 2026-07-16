@@ -13,4 +13,8 @@
     <PackageReference Include="MaxMind.GeoIP2" Version="6.0.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="UProxy.Core.Tests" />
+  </ItemGroup>
+
 </Project>

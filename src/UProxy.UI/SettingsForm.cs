@@ -11,6 +11,8 @@ public sealed class SettingsForm : Form
     private readonly TextBox _httpSources = new() { Width = 360 };
     private readonly TextBox _socksSources = new() { Width = 360 };
     private readonly TextBox _geoIp = new() { Width = 360 };
+    private readonly TextBox _truffleHog = new() { Width = 360 };
+    private readonly CheckBox _secretVerify = new() { Text = "Verify secrets online (sends candidates to provider APIs)", AutoSize = true };
     private readonly CheckBox _autoCheck = new() { Text = "Auto-check after scrape", AutoSize = true };
     private readonly CheckBox _autoSave = new() { Text = "Remember settings", AutoSize = true };
     private readonly CheckBox _remoteDns = new() { Text = "Resolve hostnames through proxy (Fake-IP / remote DNS)", AutoSize = true };
@@ -25,7 +27,7 @@ public sealed class SettingsForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(480, 400);
+        ClientSize = new Size(480, 470);
         Font = new Font("Segoe UI", 9f);
 
         _concurrency.Value = settings.Concurrency;
@@ -34,6 +36,8 @@ public sealed class SettingsForm : Form
         _httpSources.Text = settings.HttpSourcesPath;
         _socksSources.Text = settings.SocksSourcesPath;
         _geoIp.Text = settings.GeoIpDatabasePath;
+        _truffleHog.Text = settings.TruffleHogPath;
+        _secretVerify.Checked = settings.SecretScanVerify;
         _autoCheck.Checked = settings.AutoCheckAfterScrape;
         _autoSave.Checked = settings.AutoSaveResults;
         _remoteDns.Checked = settings.ResolveHostnamesThroughProxy;
@@ -63,6 +67,9 @@ public sealed class SettingsForm : Form
         Row("HTTP sources", _httpSources);
         Row("SOCKS sources", _socksSources);
         Row("GeoIP DB", _geoIp);
+        Row("TruffleHog path", _truffleHog);
+        layout.SetColumnSpan(_secretVerify, 2);
+        layout.Controls.Add(_secretVerify, 0, layout.RowCount++);
         layout.SetColumnSpan(_autoCheck, 2);
         layout.Controls.Add(_autoCheck, 0, layout.RowCount++);
         layout.SetColumnSpan(_autoSave, 2);
@@ -91,6 +98,8 @@ public sealed class SettingsForm : Form
             _settings.HttpSourcesPath = _httpSources.Text.Trim();
             _settings.SocksSourcesPath = _socksSources.Text.Trim();
             _settings.GeoIpDatabasePath = _geoIp.Text.Trim();
+            _settings.TruffleHogPath = string.IsNullOrWhiteSpace(_truffleHog.Text) ? "trufflehog" : _truffleHog.Text.Trim();
+            _settings.SecretScanVerify = _secretVerify.Checked;
             _settings.AutoCheckAfterScrape = _autoCheck.Checked;
             _settings.AutoSaveResults = _autoSave.Checked;
             _settings.ResolveHostnamesThroughProxy = _remoteDns.Checked;

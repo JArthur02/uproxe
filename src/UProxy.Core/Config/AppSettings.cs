@@ -50,6 +50,15 @@ public sealed class AppSettings
     /// <summary>Allocate 127.8.x.x Fake-IP placeholders for hostnames resolved through proxy.</summary>
     public bool EnableFakeIpDns { get; set; } = true;
 
+    /// <summary>Path to (or name of) the TruffleHog executable used by the secret scanner.</summary>
+    public string TruffleHogPath { get; set; } = "trufflehog";
+
+    /// <summary>
+    /// Let TruffleHog live-verify findings against provider APIs. Off by default: verification
+    /// transmits candidate secrets to third parties, which conflicts with the tool's privacy stance.
+    /// </summary>
+    public bool SecretScanVerify { get; set; }
+
     public ProxyProtocol PreferredCheckMode =>
         ProxyTypeMode == 1 ? ProxyProtocol.Socks5 : ProxyProtocol.Http;
 

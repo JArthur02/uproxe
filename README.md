@@ -60,6 +60,17 @@ Settings are stored under `%LocalAppData%\uProxyTool\settings.json`.
 - **Embedded auth**: HTTP Basic (`Proxy-Authorization`), SOCKS5 user/pass, SOCKS4 userid; NTLM is detected on 407 but not sent by default (privacy).
 
 
+## Secret scanning (TruffleHog)
+
+Proxy lists — especially authenticated ones (`user:pass@host:port`) and pasted blobs — occasionally carry real API keys or tokens. **Tools → Scan for secrets (TruffleHog)…** runs [TruffleHog](https://github.com/trufflesecurity/trufflehog) so you can catch leaked credentials before exporting or sharing a list.
+
+- **Targets**: pick any file or folder (e.g. an export or the sources directory), or click **Scan loaded proxies** to scan the current in-memory list (credentials included).
+- **Findings**: detector, verified flag, a **redacted** preview of the secret (the full value is never shown), source location, and line.
+- **Privacy**: verification is **off by default** — TruffleHog runs with `--no-verification` so candidate secrets are not sent to any provider API. Enable *Verify secrets online* in Settings only if you accept that trade-off.
+- **Setup**: TruffleHog is an external binary. Install it from <https://github.com/trufflesecurity/trufflehog> (or `winget install trufflesecurity.trufflehog`) so `trufflehog` is on `PATH`, or set an explicit **TruffleHog path** in Settings. The scanner reports clearly when the binary is missing.
+
+The scanner lives in `UProxy.Core` (`SecretScanner`), so it is usable headlessly/cross-platform; the UI is a thin dialog over it.
+
 ## Hotkeys
 
 | Keys | Action |
