@@ -42,6 +42,15 @@ public sealed class AppSettings
     public string UserAgent { get; set; } =
         "μProxy-Tool/2.0 (+https://github.com; privacy-respecting proxy checker)";
 
+    /// <summary>Proxifier-compatible: resolve destination hostnames through the proxy (SOCKS4a / SOCKS5 domain).</summary>
+    public bool ResolveHostnamesThroughProxy { get; set; } = true;
+
+    /// <summary>Enable SOCKS4a remote hostname resolving (Ext4a).</summary>
+    public bool UseSocks4a { get; set; } = true;
+
+    /// <summary>Allocate 127.8.x.x Fake-IP placeholders for hostnames resolved through proxy.</summary>
+    public bool EnableFakeIpDns { get; set; } = true;
+
     public ProxyProtocol PreferredCheckMode =>
         ProxyTypeMode == 1 ? ProxyProtocol.Socks5 : ProxyProtocol.Http;
 

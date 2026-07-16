@@ -12,3 +12,4 @@ decompiled/
 **/settings.json
 **/wininet-proxy-backup.json
 UProxyTool.slnx
+src/UProxy.DesktopSmoke/

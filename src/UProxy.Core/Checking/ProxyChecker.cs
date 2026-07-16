@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using UProxy.Core.Config;
+using UProxy.Core.Dns;
 using UProxy.Core.GeoIp;
 using UProxy.Core.Models;
 
@@ -11,6 +12,7 @@ public sealed class ProxyChecker
     private readonly AppSettings _settings;
     private readonly JudgeClient _judge;
     private readonly IGeoIpResolver _geoIp;
+    private readonly FakeIpDns _fakeIpDns = new();
     private IPAddress? _clientIp;
     private bool _clientIpResolved;
 
@@ -20,6 +22,8 @@ public sealed class ProxyChecker
         _geoIp = geoIp ?? NullGeoIpResolver.Instance;
         _judge = judge ?? new JudgeClient(settings);
     }
+
+    public FakeIpDns FakeIpDns => _fakeIpDns;
 
     public async Task EnsureClientIpAsync(CancellationToken ct)
     {
@@ -34,7 +38,7 @@ public sealed class ProxyChecker
         await EnsureClientIpAsync(ct).ConfigureAwait(false);
         var sw = Stopwatch.StartNew();
 
-        var (body, failure, error) = await _judge.FetchThroughHttpProxyAsync(proxy, ct).ConfigureAwait(false);
+        var (body, failure, error, auth) = await _judge.FetchThroughHttpProxyAsync(proxy, ct).ConfigureAwait(false);
         sw.Stop();
 
         if (body is null || failure != FailureReason.None)
@@ -45,7 +49,8 @@ public sealed class ProxyChecker
                 IsAlive = false,
                 Failure = failure,
                 ErrorMessage = error,
-                LatencyMs = (int)sw.ElapsedMilliseconds
+                LatencyMs = (int)sw.ElapsedMilliseconds,
+                AuthMethod = auth
             };
         }
 
@@ -67,7 +72,8 @@ public sealed class ProxyChecker
             Country = country,
             LatencyMs = (int)Math.Min(sw.ElapsedMilliseconds, _settings.TimeoutMs),
             ObservedSourceIp = observed?.ToString(),
-            Failure = FailureReason.None
+            Failure = FailureReason.None,
+            AuthMethod = auth
         };
     }
 
@@ -75,16 +81,31 @@ public sealed class ProxyChecker
     {
         await EnsureClientIpAsync(ct).ConfigureAwait(false);
 
-        // Destination: use the judge host over port 80 so we validate real application data.
         var judgeUri = new Uri(_settings.JudgeUrl.Contains("://") ? _settings.JudgeUrl : "http://" + _settings.JudgeUrl);
         var destHost = judgeUri.Host;
         var destPort = judgeUri.IsDefaultPort ? 80 : judgeUri.Port;
         var path = string.IsNullOrEmpty(judgeUri.PathAndQuery) ? "/" : judgeUri.PathAndQuery;
 
+        string? fakeIp = null;
+        if (_settings.EnableFakeIpDns && _settings.ResolveHostnamesThroughProxy &&
+            !IPAddress.TryParse(destHost, out _))
+        {
+            fakeIp = _fakeIpDns.Allocate(destHost).ToString();
+        }
+
+        var socksOpts = new SocksConnectOptions
+        {
+            UseSocks4a = _settings.UseSocks4a,
+            ResolveHostnamesThroughProxy = _settings.ResolveHostnamesThroughProxy,
+            FakeIpDns = _settings.EnableFakeIpDns ? _fakeIpDns : null
+        };
+
+        var socksDest = fakeIp ?? destHost;
+
         var socks4 = await SocksClient.ConnectAndHttpGetAsync(
-            proxy, ProxyProtocol.Socks4, destHost, destPort, path, _settings.TimeoutMs, ct).ConfigureAwait(false);
+            proxy, ProxyProtocol.Socks4, socksDest, destPort, path, _settings.TimeoutMs, ct, socksOpts).ConfigureAwait(false);
         var socks5 = await SocksClient.ConnectAndHttpGetAsync(
-            proxy, ProxyProtocol.Socks5, destHost, destPort, path, _settings.TimeoutMs, ct).ConfigureAwait(false);
+            proxy, ProxyProtocol.Socks5, socksDest, destPort, path, _settings.TimeoutMs, ct, socksOpts).ConfigureAwait(false);
 
         if (!socks4.Ok && !socks5.Ok)
         {
@@ -94,26 +115,33 @@ public sealed class ProxyChecker
                 IsAlive = false,
                 Failure = socks5.Failure != FailureReason.None ? socks5.Failure : socks4.Failure,
                 ErrorMessage = socks5.Error ?? socks4.Error,
-                LatencyMs = Math.Max(socks4.LatencyMs, socks5.LatencyMs)
+                LatencyMs = Math.Max(socks4.LatencyMs, socks5.LatencyMs),
+                AuthMethod = socks5.Auth != ProxyAuthMethod.None ? socks5.Auth : socks4.Auth,
+                UsedRemoteDns = _settings.ResolveHostnamesThroughProxy,
+                FakeIp = fakeIp
             };
         }
 
         ProxyProtocol confirmed;
         int latency;
+        ProxyAuthMethod auth;
         if (socks4.Ok && socks5.Ok)
         {
             confirmed = ProxyProtocol.Socks4And5;
             latency = (socks4.LatencyMs + socks5.LatencyMs) / 2;
+            auth = socks5.Auth != ProxyAuthMethod.None ? socks5.Auth : socks4.Auth;
         }
         else if (socks4.Ok)
         {
             confirmed = ProxyProtocol.Socks4;
             latency = socks4.LatencyMs;
+            auth = socks4.Auth;
         }
         else
         {
             confirmed = ProxyProtocol.Socks5;
             latency = socks5.LatencyMs;
+            auth = socks5.Auth;
         }
 
         return new ProxyCheckResult
@@ -121,10 +149,13 @@ public sealed class ProxyChecker
             Proxy = proxy,
             IsAlive = true,
             ConfirmedProtocol = confirmed,
-            Anonymity = AnonymityLevel.Elite, // SOCKS does not inject HTTP forwarding headers by itself
+            Anonymity = AnonymityLevel.Elite,
             Country = _geoIp.LookupCountry(proxy.Host),
             LatencyMs = latency,
-            Failure = FailureReason.None
+            Failure = FailureReason.None,
+            AuthMethod = auth,
+            UsedRemoteDns = _settings.ResolveHostnamesThroughProxy,
+            FakeIp = fakeIp
         };
     }
 }

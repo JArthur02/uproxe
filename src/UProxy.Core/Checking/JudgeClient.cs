@@ -1,5 +1,4 @@
 using System.Net;
-using System.Text;
 using UProxy.Core.Config;
 using UProxy.Core.Models;
 
@@ -16,13 +15,14 @@ public sealed class JudgeClient
         _handlerOverride = handlerOverride;
     }
 
-    public async Task<(string? Body, FailureReason Failure, string? Error)> FetchThroughHttpProxyAsync(
+    public async Task<(string? Body, FailureReason Failure, string? Error, ProxyAuthMethod Auth)> FetchThroughHttpProxyAsync(
         ParsedProxy proxy,
         CancellationToken ct)
     {
         var judges = EnumerateJudges().ToList();
         FailureReason lastFailure = FailureReason.JudgeUnavailable;
         string? lastError = null;
+        var auth = string.IsNullOrEmpty(proxy.Username) ? ProxyAuthMethod.None : ProxyAuthMethod.Basic;
 
         foreach (var judgeUrl in judges)
         {
@@ -34,9 +34,21 @@ public sealed class JudgeClient
                     Timeout = TimeSpan.FromMilliseconds(_settings.TimeoutMs)
                 };
                 client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", _settings.UserAgent);
+                // Embedded Basic auth (Proxifier: Proxy-Authorization: Basic …)
+                ProxyAuth.ApplyHttpBasic(client.DefaultRequestHeaders, proxy);
 
                 using var response = await client.GetAsync(judgeUrl, HttpCompletionOption.ResponseContentRead, ct)
                     .ConfigureAwait(false);
+
+                if ((int)response.StatusCode == 407)
+                {
+                    var (method, detail) = ProxyAuth.ClassifyProxyAuthenticate(response);
+                    auth = method == ProxyAuthMethod.None ? ProxyAuthMethod.Basic : method;
+                    lastFailure = FailureReason.AuthenticationRequired;
+                    lastError = detail ?? "Proxy authentication required.";
+                    continue;
+                }
+
                 var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
 
                 if (!response.IsSuccessStatusCode)
@@ -48,17 +60,16 @@ public sealed class JudgeClient
 
                 if (!AnonymityClassifier.LooksLikeAzenv(body))
                 {
-                    // Captive portal / block page — do not treat as alive.
                     lastFailure = FailureReason.JudgeMismatch;
                     lastError = "Response was not an azenv-style judge body";
                     continue;
                 }
 
-                return (body, FailureReason.None, null);
+                return (body, FailureReason.None, null, auth);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
-                return (null, FailureReason.Cancelled, "Cancelled");
+                return (null, FailureReason.Cancelled, "Cancelled", auth);
             }
             catch (TaskCanceledException)
             {
@@ -69,6 +80,9 @@ public sealed class JudgeClient
             {
                 lastFailure = MapHttpException(ex);
                 lastError = ex.Message;
+                if (lastFailure == FailureReason.AuthenticationRequired &&
+                    ex.Message.Contains("NTLM", StringComparison.OrdinalIgnoreCase))
+                    auth = ProxyAuthMethod.NtlmRequired;
             }
             catch (Exception ex)
             {
@@ -77,7 +91,7 @@ public sealed class JudgeClient
             }
         }
 
-        return (null, lastFailure, lastError);
+        return (null, lastFailure, lastError, auth);
     }
 
     public async Task<(bool Ok, FailureReason Failure, string? Error)> ProbeHttpsAsync(
@@ -92,10 +106,16 @@ public sealed class JudgeClient
                 Timeout = TimeSpan.FromMilliseconds(_settings.TimeoutMs)
             };
             client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", _settings.UserAgent);
+            ProxyAuth.ApplyHttpBasic(client.DefaultRequestHeaders, proxy);
 
             using var response = await client.GetAsync("https://www.google.com/generate_204", ct)
                 .ConfigureAwait(false);
-            // 204 No Content is Google's connectivity check; also accept 200/301/302.
+            if ((int)response.StatusCode == 407)
+            {
+                var (_, detail) = ProxyAuth.ClassifyProxyAuthenticate(response);
+                return (false, FailureReason.AuthenticationRequired, detail);
+            }
+
             var code = (int)response.StatusCode;
             if (code is 204 or 200 or 301 or 302)
                 return (true, FailureReason.None, null);
@@ -120,7 +140,6 @@ public sealed class JudgeClient
         }
     }
 
-    /// <summary>Fetches the judge without a proxy so we know the user's real IP for classification.</summary>
     public async Task<IPAddress?> GetDirectClientIpAsync(CancellationToken ct)
     {
         foreach (var judgeUrl in EnumerateJudges())
@@ -160,16 +179,22 @@ public sealed class JudgeClient
 
     private static HttpMessageHandler CreateProxyHandler(ParsedProxy proxy)
     {
-        var webProxy = new WebProxy(proxy.Host, proxy.Port);
-        if (!string.IsNullOrEmpty(proxy.Username))
-            webProxy.Credentials = new NetworkCredential(proxy.Username, proxy.Password);
+        var webProxy = new WebProxy($"http://{proxy.Endpoint}");
+        var cred = ProxyAuth.ToNetworkCredential(proxy);
+        if (cred is not null)
+        {
+            // Prefer explicit Basic; do not enable default/Negotiate credentials (privacy).
+            webProxy.Credentials = cred;
+            webProxy.UseDefaultCredentials = false;
+        }
 
         return new SocketsHttpHandler
         {
             Proxy = webProxy,
             UseProxy = true,
             AutomaticDecompression = DecompressionMethods.All,
-            ConnectTimeout = TimeSpan.FromSeconds(15)
+            ConnectTimeout = TimeSpan.FromSeconds(15),
+            PreAuthenticate = cred is not null
         };
     }
 

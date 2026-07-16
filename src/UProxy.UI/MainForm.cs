@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using UProxy.Core.Checking;
 using UProxy.Core.Config;
 using UProxy.Core.Exporting;
 using UProxy.Core.GeoIp;
@@ -286,7 +287,9 @@ public sealed class MainForm : Form
             Country = result.Country,
             Anonymity = result.Anonymity.ToString(),
             Protocol = FormatProtocol(result.ConfirmedProtocol),
-            LatencyMs = result.LatencyMs
+            LatencyMs = result.LatencyMs,
+            Auth = ProxyAuth.Describe(result.AuthMethod),
+            Detail = result.IsAlive ? "" : FailureMessages.Describe(result.Failure, result.ErrorMessage)
         });
     }
 
@@ -571,5 +574,7 @@ public sealed class MainForm : Form
         public string Anonymity { get; set; } = "";
         public string Protocol { get; set; } = "";
         public int LatencyMs { get; set; }
+        public string Auth { get; set; } = "";
+        public string Detail { get; set; } = "";
     }
 }

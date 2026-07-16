@@ -36,6 +36,16 @@ public enum FailureReason
     UnknownError
 }
 
+public enum ProxyAuthMethod
+{
+    None = 0,
+    Basic = 1,
+    SocksUserPass = 2,
+    Socks4UserId = 3,
+    /// <summary>Proxy advertised NTLM/Negotiate; not performed by default (privacy).</summary>
+    NtlmRequired = 4
+}
+
 public enum SessionKind
 {
     Idle,
@@ -96,6 +106,9 @@ public sealed class ProxyCheckResult
     public string? ErrorMessage { get; init; }
     public DateTimeOffset CheckedAt { get; init; } = DateTimeOffset.UtcNow;
     public string? ObservedSourceIp { get; init; }
+    public ProxyAuthMethod AuthMethod { get; init; } = ProxyAuthMethod.None;
+    public bool UsedRemoteDns { get; init; }
+    public string? FakeIp { get; init; }
 }
 
 public sealed record ScrapeSourceResult

@@ -56,6 +56,9 @@ Settings are stored under `%LocalAppData%\uProxyTool\settings.json`.
 - Anonymity: Transparent / Anonymous / Elite with corrected header rules vs 1.81.
 - HTTPS probe uses Google’s `generate_204` connectivity check through the proxy.
 - SOCKS4/5: full handshake + HTTP response through the tunnel (not merely `Connected`).
+- **Fake-IP DNS** (Proxifier-compatible `127.8.x.x` placeholders) + SOCKS4a / remote hostname resolve through the proxy.
+- **Embedded auth**: HTTP Basic (`Proxy-Authorization`), SOCKS5 user/pass, SOCKS4 userid; NTLM is detected on 407 but not sent by default (privacy).
+
 
 ## Hotkeys
 

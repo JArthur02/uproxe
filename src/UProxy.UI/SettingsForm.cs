@@ -13,6 +13,9 @@ public sealed class SettingsForm : Form
     private readonly TextBox _geoIp = new() { Width = 360 };
     private readonly CheckBox _autoCheck = new() { Text = "Auto-check after scrape", AutoSize = true };
     private readonly CheckBox _autoSave = new() { Text = "Remember settings", AutoSize = true };
+    private readonly CheckBox _remoteDns = new() { Text = "Resolve hostnames through proxy (Fake-IP / remote DNS)", AutoSize = true };
+    private readonly CheckBox _socks4a = new() { Text = "Use SOCKS 4A extension", AutoSize = true };
+    private readonly CheckBox _fakeIp = new() { Text = "Allocate 127.8.x.x Fake-IP placeholders", AutoSize = true };
 
     public SettingsForm(AppSettings settings)
     {
@@ -22,7 +25,7 @@ public sealed class SettingsForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(420, 320);
+        ClientSize = new Size(480, 400);
         Font = new Font("Segoe UI", 9f);
 
         _concurrency.Value = settings.Concurrency;
@@ -33,6 +36,9 @@ public sealed class SettingsForm : Form
         _geoIp.Text = settings.GeoIpDatabasePath;
         _autoCheck.Checked = settings.AutoCheckAfterScrape;
         _autoSave.Checked = settings.AutoSaveResults;
+        _remoteDns.Checked = settings.ResolveHostnamesThroughProxy;
+        _socks4a.Checked = settings.UseSocks4a;
+        _fakeIp.Checked = settings.EnableFakeIpDns;
 
         var layout = new TableLayoutPanel
         {
@@ -57,8 +63,16 @@ public sealed class SettingsForm : Form
         Row("HTTP sources", _httpSources);
         Row("SOCKS sources", _socksSources);
         Row("GeoIP DB", _geoIp);
-        layout.Controls.Add(_autoCheck, 1, layout.RowCount++);
-        layout.Controls.Add(_autoSave, 1, layout.RowCount++);
+        layout.SetColumnSpan(_autoCheck, 2);
+        layout.Controls.Add(_autoCheck, 0, layout.RowCount++);
+        layout.SetColumnSpan(_autoSave, 2);
+        layout.Controls.Add(_autoSave, 0, layout.RowCount++);
+        layout.SetColumnSpan(_remoteDns, 2);
+        layout.Controls.Add(_remoteDns, 0, layout.RowCount++);
+        layout.SetColumnSpan(_socks4a, 2);
+        layout.Controls.Add(_socks4a, 0, layout.RowCount++);
+        layout.SetColumnSpan(_fakeIp, 2);
+        layout.Controls.Add(_fakeIp, 0, layout.RowCount++);
 
         var buttons = new FlowLayoutPanel
         {
@@ -79,6 +93,9 @@ public sealed class SettingsForm : Form
             _settings.GeoIpDatabasePath = _geoIp.Text.Trim();
             _settings.AutoCheckAfterScrape = _autoCheck.Checked;
             _settings.AutoSaveResults = _autoSave.Checked;
+            _settings.ResolveHostnamesThroughProxy = _remoteDns.Checked;
+            _settings.UseSocks4a = _socks4a.Checked;
+            _settings.EnableFakeIpDns = _fakeIp.Checked;
             _settings.Clamp();
         };
         buttons.Controls.Add(ok);
