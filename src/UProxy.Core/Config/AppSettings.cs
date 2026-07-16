@@ -25,8 +25,7 @@ public sealed class AppSettings
     /// <summary>Optional fallback judges tried if the primary returns a non-azenv body.</summary>
     public List<string> FallbackJudgeUrls { get; set; } =
     [
-        "https://www.proxyjudge.info/",
-        "http://azenv.net/"
+        "https://www.proxyjudge.info/"
     ];
 
     public bool AutoCheckAfterScrape { get; set; } = true;
