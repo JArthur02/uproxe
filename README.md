@@ -68,3 +68,6 @@ Settings are stored under `%LocalAppData%\uProxyTool\settings.json`.
 | Ctrl+V | Paste proxies |
 | Ctrl+C | Copy selected |
 | Ctrl+X | Clear list |
+| Ctrl+A | Select all results |
+
+Results columns are sortable (click a header), rows are tinted by anonymity (Elite / Anonymous / Transparent), and the status bar shows a live alive/anonymity breakdown (or a SOCKS4/5 breakdown in SOCKS mode).
