@@ -37,7 +37,7 @@ public sealed class JudgeClient
                 {
                     Timeout = TimeSpan.FromMilliseconds(_settings.TimeoutMs)
                 };
-                client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", _settings.UserAgent);
+                client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", UserAgents.AsciiSafe(_settings.UserAgent));
                 // Embedded Basic auth (Proxifier: Proxy-Authorization: Basic …)
                 ProxyAuth.ApplyHttpBasic(client.DefaultRequestHeaders, proxy);
 
@@ -142,7 +142,7 @@ public sealed class JudgeClient
             if (!string.IsNullOrEmpty(proxy.Username))
                 sb.Append("Proxy-Authorization: ")
                   .Append(ProxyAuth.FormatBasicHeader(proxy.Username, proxy.Password)).Append("\r\n");
-            sb.Append("User-Agent: ").Append(_settings.UserAgent).Append("\r\n");
+            sb.Append("User-Agent: ").Append(UserAgents.AsciiSafe(_settings.UserAgent)).Append("\r\n");
             sb.Append("Proxy-Connection: close\r\n\r\n");
 
             await socket.SendAsync(Encoding.ASCII.GetBytes(sb.ToString()), SocketFlags.None, cts.Token)
@@ -205,7 +205,7 @@ public sealed class JudgeClient
                 {
                     Timeout = TimeSpan.FromMilliseconds(Math.Min(_settings.TimeoutMs, 8_000))
                 };
-                client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", _settings.UserAgent);
+                client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", UserAgents.AsciiSafe(_settings.UserAgent));
                 var body = await client.GetStringAsync(judgeUrl, ct).ConfigureAwait(false);
                 return AnonymityClassifier.TryGetRemoteAddr(body);
             }

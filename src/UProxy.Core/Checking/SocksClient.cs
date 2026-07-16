@@ -76,7 +76,7 @@ public static class SocksClient
             var hostHeader = options.FakeIpDns?.ResolveDestinationForProxy(destinationHost, resolveHostnamesThroughProxy: true)
                              ?? destinationHost;
             var request = Encoding.ASCII.GetBytes(
-                $"GET {httpPath} HTTP/1.1\r\nHost: {hostHeader}\r\nConnection: close\r\nUser-Agent: μProxy-Tool/2.0\r\n\r\n");
+                $"GET {httpPath} HTTP/1.1\r\nHost: {hostHeader}\r\nConnection: close\r\nUser-Agent: uProxy-Tool/2.0\r\n\r\n");
             await socket.SendAsync(request, SocketFlags.None, cts.Token).ConfigureAwait(false);
 
             var buffer = new byte[512];

@@ -99,7 +99,7 @@ public sealed class WorkSession : IAsyncDisposable
             {
                 Timeout = TimeSpan.FromMilliseconds(Math.Max(_settings.TimeoutMs, 12_000))
             };
-            client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", _settings.UserAgent);
+            client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", UProxy.Core.Config.UserAgents.AsciiSafe(_settings.UserAgent));
 
             var producer = Task.Run(async () =>
             {

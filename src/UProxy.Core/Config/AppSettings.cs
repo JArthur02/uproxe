@@ -100,5 +100,7 @@ public sealed class AppSettings
         ConnectTimeoutMs = Math.Clamp(ConnectTimeoutMs, 500, TimeoutMs);
         if (string.IsNullOrWhiteSpace(JudgeUrl))
             JudgeUrl = "http://azenv.net";
+        // HTTP/1.1 headers must be ASCII; strip any non-ASCII so checks don't throw.
+        UserAgent = UserAgents.AsciiSafe(UserAgent);
     }
 }
