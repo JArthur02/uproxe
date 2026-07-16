@@ -33,7 +33,11 @@ public enum FailureReason
     EmptyResponse,
     Cancelled,
     Timeout,
-    UnknownError
+    UnknownError,
+    /// <summary>TCP reached the proxy, but the proxy could not open a connection to the target host.</summary>
+    TargetUnreachableThroughProxy,
+    /// <summary>The proxy refused the HTTPS CONNECT tunnel (e.g. Squid SSL_ports / ISA tunnel-port policy).</summary>
+    HttpsConnectForbidden
 }
 
 public enum ProxyAuthMethod

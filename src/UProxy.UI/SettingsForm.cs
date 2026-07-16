@@ -8,6 +8,7 @@ public sealed class SettingsForm : Form
     private readonly NumericUpDown _concurrency = new() { Minimum = 1, Maximum = 256, Width = 80 };
     private readonly NumericUpDown _timeout = new() { Minimum = 1, Maximum = 120, Width = 80 };
     private readonly TextBox _judge = new() { Width = 360 };
+    private readonly ComboBox _userAgent = new() { Width = 360, DropDownStyle = ComboBoxStyle.DropDown };
     private readonly TextBox _httpSources = new() { Width = 360 };
     private readonly TextBox _socksSources = new() { Width = 360 };
     private readonly TextBox _geoIp = new() { Width = 360 };
@@ -33,6 +34,11 @@ public sealed class SettingsForm : Form
         _concurrency.Value = settings.Concurrency;
         _timeout.Value = Math.Clamp(settings.TimeoutMs / 1000, 1, 120);
         _judge.Text = settings.JudgeUrl;
+        foreach (var (name, value) in UserAgents.Presets)
+            _userAgent.Items.Add(new UserAgentItem(name, value));
+        // Show the friendly preset name when the current UA matches one, otherwise the raw string.
+        var matchedPreset = UserAgents.Presets.FirstOrDefault(p => p.Value == settings.UserAgent);
+        _userAgent.Text = matchedPreset.Value is null ? settings.UserAgent : matchedPreset.Name;
         _httpSources.Text = settings.HttpSourcesPath;
         _socksSources.Text = settings.SocksSourcesPath;
         _geoIp.Text = settings.GeoIpDatabasePath;
@@ -64,6 +70,7 @@ public sealed class SettingsForm : Form
         Row("Workers", _concurrency);
         Row("Timeout (s)", _timeout);
         Row("Judge URL", _judge);
+        Row("User-Agent", _userAgent);
         Row("HTTP sources", _httpSources);
         Row("SOCKS sources", _socksSources);
         Row("GeoIP DB", _geoIp);
@@ -95,6 +102,7 @@ public sealed class SettingsForm : Form
             _settings.Concurrency = (int)_concurrency.Value;
             _settings.TimeoutMs = (int)_timeout.Value * 1000;
             _settings.JudgeUrl = _judge.Text.Trim();
+            _settings.UserAgent = ResolveUserAgent(_userAgent.Text.Trim());
             _settings.HttpSourcesPath = _httpSources.Text.Trim();
             _settings.SocksSourcesPath = _socksSources.Text.Trim();
             _settings.GeoIpDatabasePath = _geoIp.Text.Trim();
@@ -114,5 +122,18 @@ public sealed class SettingsForm : Form
 
         Controls.Add(layout);
         Controls.Add(buttons);
+    }
+
+    private static string ResolveUserAgent(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return UserAgents.Default;
+        var preset = UserAgents.Presets.FirstOrDefault(p => p.Name == text);
+        return preset.Value ?? text;
+    }
+
+    private sealed record UserAgentItem(string Name, string Value)
+    {
+        public override string ToString() => Name;
     }
 }

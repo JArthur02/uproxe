@@ -177,6 +177,7 @@ public sealed class MainForm : Form
             GridColumn(nameof(ResultRow.Country), "Country", 70),
             GridColumn(nameof(ResultRow.Anonymity), "Anonymity", 90),
             GridColumn(nameof(ResultRow.Protocol), "Type", 80),
+            GridColumn(nameof(ResultRow.ConnectMs), "Connect (ms)", 80, rightAlign: true),
             GridColumn(nameof(ResultRow.LatencyMs), "Latency (ms)", 80, rightAlign: true),
             GridColumn(nameof(ResultRow.Auth), "Auth", 90),
             GridColumn(nameof(ResultRow.Detail), "Detail", 220)
@@ -372,6 +373,7 @@ public sealed class MainForm : Form
             Country = result.Country,
             Anonymity = result.Anonymity.ToString(),
             Protocol = FormatProtocol(result.ConfirmedProtocol),
+            ConnectMs = result.ConnectMs ?? 0,
             LatencyMs = result.LatencyMs,
             Auth = ProxyAuth.Describe(result.AuthMethod),
             Detail = result.IsAlive ? "" : FailureMessages.Describe(result.Failure, result.ErrorMessage),
@@ -696,6 +698,7 @@ public sealed class MainForm : Form
         public string Country { get; set; } = "";
         public string Anonymity { get; set; } = "";
         public string Protocol { get; set; } = "";
+        public int ConnectMs { get; set; }
         public int LatencyMs { get; set; }
         public string Auth { get; set; } = "";
         public string Detail { get; set; } = "";

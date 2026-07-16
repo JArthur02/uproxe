@@ -1,4 +1,6 @@
 using System.Net;
+using System.Net.Sockets;
+using System.Text;
 using UProxy.Core.Config;
 using UProxy.Core.Models;
 
@@ -101,50 +103,91 @@ public sealed class JudgeClient
         return (null, lastFailure, lastError, auth);
     }
 
+    private const string HttpsProbeHost = "www.google.com";
+    private const int HttpsProbePort = 443;
+
+    /// <summary>
+    /// Probes HTTPS support by issuing a raw HTTP CONNECT to the proxy and reading the tunnel
+    /// status line directly. This lets us distinguish a working tunnel (200) from a proxy that
+    /// forbids CONNECT to the port (403/405 → <see cref="FailureReason.HttpsConnectForbidden"/>),
+    /// from an auth requirement (407), mirroring Proxifier's SSL-tunnel test.
+    /// </summary>
     public async Task<(bool Ok, FailureReason Failure, string? Error)> ProbeHttpsAsync(
         ParsedProxy proxy,
         CancellationToken ct)
     {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(_settings.TimeoutMs);
+
         try
         {
-            using var handler = CreateProxyHandler(proxy);
-            using var client = new HttpClient(handler)
+            using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp)
             {
-                Timeout = TimeSpan.FromMilliseconds(_settings.TimeoutMs)
+                NoDelay = true
             };
-            client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", _settings.UserAgent);
-            ProxyAuth.ApplyHttpBasic(client.DefaultRequestHeaders, proxy);
 
-            using var response = await client.GetAsync("https://www.google.com/generate_204", ct)
-                .ConfigureAwait(false);
-            if ((int)response.StatusCode == 407)
+            if (!IPAddress.TryParse(proxy.Host, out var proxyIp))
             {
-                var (_, detail) = ProxyAuth.ClassifyProxyAuthenticate(response);
-                return (false, FailureReason.AuthenticationRequired, detail);
+                var addrs = await System.Net.Dns.GetHostAddressesAsync(proxy.Host, cts.Token).ConfigureAwait(false);
+                proxyIp = addrs.FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork)
+                          ?? addrs.FirstOrDefault()
+                          ?? throw new SocketException((int)SocketError.HostNotFound);
             }
 
-            var code = (int)response.StatusCode;
-            if (code is 204 or 200 or 301 or 302)
-                return (true, FailureReason.None, null);
+            await socket.ConnectAsync(new IPEndPoint(proxyIp, proxy.Port), cts.Token).ConfigureAwait(false);
 
-            return (false, FailureReason.TlsFailure, $"Unexpected status {code}");
+            var sb = new StringBuilder();
+            sb.Append("CONNECT ").Append(HttpsProbeHost).Append(':').Append(HttpsProbePort).Append(" HTTP/1.1\r\n");
+            sb.Append("Host: ").Append(HttpsProbeHost).Append(':').Append(HttpsProbePort).Append("\r\n");
+            if (!string.IsNullOrEmpty(proxy.Username))
+                sb.Append("Proxy-Authorization: ")
+                  .Append(ProxyAuth.FormatBasicHeader(proxy.Username, proxy.Password)).Append("\r\n");
+            sb.Append("User-Agent: ").Append(_settings.UserAgent).Append("\r\n");
+            sb.Append("Proxy-Connection: close\r\n\r\n");
+
+            await socket.SendAsync(Encoding.ASCII.GetBytes(sb.ToString()), SocketFlags.None, cts.Token)
+                .ConfigureAwait(false);
+
+            var buffer = new byte[512];
+            var read = await socket.ReceiveAsync(buffer, SocketFlags.None, cts.Token).ConfigureAwait(false);
+            if (read <= 0)
+                return (false, FailureReason.EmptyResponse, "Proxy closed the connection during CONNECT.");
+
+            var statusLine = Encoding.ASCII.GetString(buffer, 0, read).Split("\r\n", 2)[0];
+            var code = ParseStatusCode(statusLine);
+
+            return code switch
+            {
+                200 => (true, FailureReason.None, null),
+                407 => (false, FailureReason.AuthenticationRequired, "Proxy requires authentication for CONNECT."),
+                403 or 405 or 400 => (false, FailureReason.HttpsConnectForbidden, $"CONNECT rejected: {statusLine}"),
+                502 or 503 or 504 => (false, FailureReason.TargetUnreachableThroughProxy, $"CONNECT failed: {statusLine}"),
+                _ => (false, FailureReason.TlsFailure, $"Unexpected CONNECT status: {statusLine}")
+            };
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             return (false, FailureReason.Cancelled, "Cancelled");
         }
-        catch (TaskCanceledException)
+        catch (OperationCanceledException)
         {
-            return (false, FailureReason.Timeout, "Timed out");
+            return (false, FailureReason.Timeout, "Timed out during HTTPS CONNECT probe.");
         }
-        catch (HttpRequestException ex)
+        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused)
         {
-            return (false, MapHttpException(ex), ex.Message);
+            return (false, FailureReason.ConnectRefused, ex.Message);
         }
         catch (Exception ex)
         {
-            return (false, FailureReason.UnknownError, ex.Message);
+            return (false, FailureReason.TlsFailure, ex.Message);
         }
+    }
+
+    private static int ParseStatusCode(string statusLine)
+    {
+        // Expected: "HTTP/1.1 200 Connection established"
+        var parts = statusLine.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 && int.TryParse(parts[1], out var code) ? code : 0;
     }
 
     public async Task<IPAddress?> GetDirectClientIpAsync(CancellationToken ct)
