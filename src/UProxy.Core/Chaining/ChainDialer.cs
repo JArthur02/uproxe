@@ -113,14 +113,30 @@ public sealed class ChainDialer
                         reason: FailureReason.Timeout,
                         message: $"Hop {i + 1}/{hops.Count} timed out ({hop.Endpoint} → {FormatEndpoint(nextHost, nextPort)}).");
                 }
-                catch (Exception ex) when (ex is AuthenticationException or IOException)
+                catch (AuthenticationException ex) when (hop.Transport == ProxyTransport.Tls)
                 {
                     throw new ChainDialException(
                         failedHopIndex: i,
                         fromEndpoint: hop.Endpoint,
                         toEndpoint: FormatEndpoint(nextHost, nextPort),
-                        reason: FailureReason.TlsFailure,
-                        message: $"Hop {i + 1}/{hops.Count} TLS to {hop.Endpoint} failed: {ex.Message}",
+                        reason: FailureReason.ProxyTransportTlsFailure,
+                        message:
+                            $"Hop {i + 1}/{hops.Count} TLS to proxy {hop.Endpoint} failed: {ex.Message}",
+                        inner: ex);
+                }
+                catch (IOException ex)
+                {
+                    var reason = hop.Transport == ProxyTransport.Tls
+                        ? FailureReason.ProxyTransportTlsFailure
+                        : FailureReason.ProxyHandshakeFailure;
+
+                    throw new ChainDialException(
+                        failedHopIndex: i,
+                        fromEndpoint: hop.Endpoint,
+                        toEndpoint: FormatEndpoint(nextHost, nextPort),
+                        reason: reason,
+                        message:
+                            $"Hop {i + 1}/{hops.Count} ({hop.Endpoint}) transport failed: {ex.Message}",
                         inner: ex);
                 }
             }

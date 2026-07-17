@@ -58,7 +58,11 @@ public sealed class WindowsProxyManager
 
         // Never overwrite an existing crash-recovery backup — that would lose the user's
         // original WinINET configuration if we re-enable while a prior backup is pending.
-        SaveBackupIfNoPending(Capture());
+        // Skip Capture() when a backup already exists (registry read is unnecessary).
+        if (!HasPendingRestore)
+        {
+            SaveBackupIfNoPending(Capture());
+        }
 
         using var key = Registry.CurrentUser.OpenSubKey(InternetSettingsKey, writable: true)
                         ?? throw new InvalidOperationException("Cannot open Internet Settings registry key.");
@@ -67,8 +71,17 @@ public sealed class WindowsProxyManager
         key.SetValue("ProxyEnable", 1);
         // PAC/AutoConfigURL can override ProxyServer; clear it while the gateway is active.
         // The pending backup retains the original AutoConfigURL for Restore.
-        try { key.DeleteValue("AutoConfigURL", throwOnMissingValue: false); }
-        catch { /* ignore */ }
+        try
+        {
+            key.DeleteValue("AutoConfigURL", throwOnMissingValue: false);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                "Windows automatic proxy configuration could not be disabled. " +
+                "The local gateway was not enabled safely.",
+                ex);
+        }
         NotifyWinInet();
     }
 

@@ -223,6 +223,32 @@ public class ReleaseBlockerFixTests
             $"Relay should abort on fault quickly, took {sw.Elapsed}");
     }
 
+    [Fact]
+    public void ProxyTransportTlsFailure_IsProxyAttributable()
+    {
+        Assert.True(
+            ChainHealthTracker.IsProxyAttributable(
+                FailureReason.ProxyTransportTlsFailure));
+
+        Assert.False(
+            ChainHealthTracker.IsProxyAttributable(
+                FailureReason.TlsFailure));
+
+        var tracker = new ChainHealthTracker();
+        var hop = ProxyHop.FromParsed(
+            new ParsedProxy("proxy.example", 443, ProxyProtocol.Https),
+            ProxyKind.Http);
+
+        for (var i = 0; i < ChainHealthTracker.FailuresBeforeVerify; i++)
+        {
+            tracker.RecordProxyFailure(
+                hop,
+                FailureReason.ProxyTransportTlsFailure);
+        }
+
+        Assert.True(tracker.NeedsVerification(hop));
+    }
+
     private sealed class ConnectedPairForRelay : IAsyncDisposable
     {
         public required System.Net.Sockets.NetworkStream LeftA { get; init; }

@@ -88,6 +88,31 @@ public class HttpProxyParserTests
     }
 
     [Fact]
+    public void BodyPolicy_RequiresChunkedAsFinalTransferCoding()
+    {
+        var invalid = HttpProxyRequestParser.Parse(
+            "POST http://example.com/ HTTP/1.1\r\n" +
+            "Host: example.com\r\n" +
+            "Transfer-Encoding: chunked, gzip\r\n\r\n");
+
+        Assert.Throws<HttpProxyParseException>(() =>
+            HttpProxyRequestParser.GetRequestBodyLengthPolicy(
+                invalid,
+                out _));
+
+        var valid = HttpProxyRequestParser.Parse(
+            "POST http://example.com/ HTTP/1.1\r\n" +
+            "Host: example.com\r\n" +
+            "Transfer-Encoding: gzip, chunked\r\n\r\n");
+
+        Assert.Equal(
+            RequestBodyLengthKind.Chunked,
+            HttpProxyRequestParser.GetRequestBodyLengthPolicy(
+                valid,
+                out _));
+    }
+
+    [Fact]
     public void BuildOriginForm_StripsExpect()
     {
         var parsed = HttpProxyRequestParser.Parse(
