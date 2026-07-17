@@ -61,10 +61,21 @@ public sealed class ChainControlForm : Form
     private readonly TextBox _fixedName = new() { Dock = DockStyle.Fill };
     private readonly ListBox _poolCandidates = new() { IntegralHeight = false, Dock = DockStyle.Fill };
     private readonly TextBox _poolName = new() { Dock = DockStyle.Fill, Text = "default-pool" };
+    private readonly ComboBox _poolEligibility = new()
+    {
+        DropDownStyle = ComboBoxStyle.DropDownList,
+        Dock = DockStyle.Fill,
+        IntegralHeight = false
+    };
+    private readonly ComboBox _poolMode = new()
+    {
+        DropDownStyle = ComboBoxStyle.DropDownList,
+        Dock = DockStyle.Fill,
+        IntegralHeight = false
+    };
 
     private Button? _btnStartStrict;
-    private Button? _btnStartFailover;
-    private Button? _btnStartTwoHop;
+    private System.Windows.Forms.Timer? _liveTimer;
 
     private readonly BindingList<HopItem> _fixedItems = [];
     private readonly BindingList<PoolItem> _poolItems = [];
@@ -300,40 +311,102 @@ public sealed class ChainControlForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 2,
-            RowCount = 2,
+            RowCount = 3,
             Padding = new Padding(8)
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, SideColumnWidth));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         var side = BuildSidePanel();
-        var importAlive = MakeSideButton("Import elite from session");
+        var importAlive = MakeSideButton("Import from session");
         var paste = MakeSideButton("Paste candidates");
         var remove = MakeSideButton("Remove");
+        var refreshBadges = MakeSideButton("Refresh badges");
+        var removeFailed = MakeSideButton("Remove failed");
         var save = MakeSideButton("Save pool");
-        _btnStartFailover = MakeSideButton("Start Fast Failover");
-        _btnStartTwoHop = MakeSideButton("Auto 2-hop chain");
 
         importAlive.Click += (_, _) => ImportPoolFromSession();
         paste.Click += (_, _) => PastePool();
         remove.Click += (_, _) => RemoveSelectedPool();
+        refreshBadges.Click += (_, _) => RefreshPoolBadges();
+        removeFailed.Click += (_, _) => RemoveFailedPoolItems();
         save.Click += (_, _) => SavePool();
-        _btnStartFailover.Click += async (_, _) => await StartFastFailoverAsync();
-        _btnStartTwoHop.Click += async (_, _) => await StartPrivacyTwoHopAsync();
 
-        side.Controls.AddRange([importAlive, paste, remove, save, _btnStartFailover, _btnStartTwoHop]);
+        side.Controls.AddRange([importAlive, paste, remove, refreshBadges, removeFailed, save]);
 
+        _poolEligibility.Items.AddRange([
+            "Elite only (default)",
+            "Elite + Anonymous",
+            "Any alive"
+        ]);
+        _poolEligibility.SelectedIndex = 0;
+
+        _poolMode.Items.AddRange([
+            "Fast failover",
+            "Auto 2-hop"
+        ]);
+        _poolMode.SelectedIndex = 0;
+
+        var options = BuildPoolOptionsPanel();
         var nameRow = BuildNameRow(_poolName);
 
         root.Controls.Add(_poolCandidates, 0, 0);
         root.Controls.Add(side, 1, 0);
-        root.SetRowSpan(side, 2);
-        root.Controls.Add(nameRow, 0, 1);
+        root.SetRowSpan(side, 3);
+        root.Controls.Add(options, 0, 1);
+        root.Controls.Add(nameRow, 0, 2);
 
         page.Controls.Add(root);
         return page;
+    }
+
+    private TableLayoutPanel BuildPoolOptionsPanel()
+    {
+        var panel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 2,
+            RowCount = 2,
+            Margin = new Padding(0, 8, 0, 0),
+            Padding = new Padding(0)
+        };
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var eligibilityLabel = new Label
+        {
+            Text = "Eligibility:",
+            AutoSize = true,
+            Anchor = AnchorStyles.Left,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Margin = new Padding(0, 6, 10, 0),
+            UseMnemonic = false
+        };
+        var modeLabel = new Label
+        {
+            Text = "Mode:",
+            AutoSize = true,
+            Anchor = AnchorStyles.Left,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Margin = new Padding(0, 6, 10, 0),
+            UseMnemonic = false
+        };
+
+        _poolEligibility.Margin = new Padding(0, 2, 0, 2);
+        _poolMode.Margin = new Padding(0, 2, 0, 2);
+
+        panel.Controls.Add(eligibilityLabel, 0, 0);
+        panel.Controls.Add(_poolEligibility, 1, 0);
+        panel.Controls.Add(modeLabel, 0, 1);
+        panel.Controls.Add(_poolMode, 1, 1);
+        return panel;
     }
 
     /// <summary>Fixed side-rail width so long action buttons are never clipped.</summary>
@@ -396,6 +469,8 @@ public sealed class ChainControlForm : Form
         _tabs.SelectedIndexChanged += (_, _) => RefreshStatus();
         _fixedItems.ListChanged += (_, _) => RefreshStatus();
         _poolItems.ListChanged += (_, _) => RefreshStatus();
+        _poolEligibility.SelectedIndexChanged += (_, _) => RefreshStatus();
+        _poolMode.SelectedIndexChanged += (_, _) => RefreshStatus();
         _routing.Changed += () =>
         {
             if (IsHandleCreated && !IsDisposed)
@@ -404,8 +479,44 @@ public sealed class ChainControlForm : Form
                 catch (ObjectDisposedException) { /* closing */ }
             }
         };
-        Shown += (_, _) => RefreshStatus();
+        Shown += (_, _) =>
+        {
+            EnsureLiveTimer();
+            _liveTimer!.Start();
+            RefreshStatus();
+        };
+        FormClosed += (_, _) =>
+        {
+            if (_liveTimer is not null)
+            {
+                _liveTimer.Stop();
+                _liveTimer.Tick -= OnLiveTimerTick;
+                _liveTimer.Dispose();
+                _liveTimer = null;
+            }
+        };
         FormClosing += OnFormClosing;
+    }
+
+    private void EnsureLiveTimer()
+    {
+        if (_liveTimer is not null)
+            return;
+        _liveTimer = new System.Windows.Forms.Timer { Interval = 2000 };
+        _liveTimer.Tick += OnLiveTimerTick;
+    }
+
+    private void OnLiveTimerTick(object? sender, EventArgs e)
+    {
+        if (IsDisposed || !IsHandleCreated)
+            return;
+
+        // Always tick; heavy refresh only while the gateway is running.
+        if (!_gateway.IsRunning)
+            return;
+
+        RefreshStatus();
+        RefreshPoolBadges();
     }
 
     private void OnFormClosing(object? sender, FormClosingEventArgs e)
@@ -483,10 +594,6 @@ public sealed class ChainControlForm : Form
             _btnStop.Enabled = false;
             if (_btnStartStrict is not null)
                 _btnStartStrict.Enabled = false;
-            if (_btnStartFailover is not null)
-                _btnStartFailover.Enabled = false;
-            if (_btnStartTwoHop is not null)
-                _btnStartTwoHop.Enabled = false;
         }
         else
         {
@@ -546,22 +653,35 @@ public sealed class ChainControlForm : Form
             : "Chain state: Stopped";
 
         var hops = running ? _manager.GetActiveHops() : Array.Empty<ProxyHop>();
-        _lblHops.Text = hops.Count == 0
-            ? "Active hops: (none)"
-            : "Active hops: " + string.Join(" → ", hops.Select(h => $"{h.Kind} {h.Endpoint}"));
+        _lblHops.Text = FormatActiveHops(hops, running);
+
+        EnsureLiveTimer();
+        if (_liveTimer is { Enabled: false } && IsHandleCreated)
+            _liveTimer.Start();
 
         var canStrict = _fixedItems.Count > 0;
-        var canFailover = _poolItems.Count > 0;
-        var canTwoHop = _poolItems.Count >= 2;
-        var canHeaderStart = PreferPoolTab() ? canFailover : canStrict;
+        var canPoolStart = PreferTwoHopMode()
+            ? _poolItems.Count >= 2
+            : _poolItems.Count > 0;
+        var canHeaderStart = PreferPoolTab() ? canPoolStart : canStrict;
 
         if (!_busy)
         {
-            _btnStart.Text = running
-                ? "Apply changes"
-                : PreferPoolTab()
-                    ? "Start fast failover"
-                    : "Start N-hop chain";
+            if (running)
+            {
+                _btnStart.Text = "Apply changes";
+            }
+            else if (PreferPoolTab())
+            {
+                _btnStart.Text = PreferTwoHopMode()
+                    ? "Start auto 2-hop"
+                    : "Start fast failover";
+            }
+            else
+            {
+                _btnStart.Text = $"Start {_fixedItems.Count}-hop chain";
+            }
+
             _btnStart.Enabled = canHeaderStart;
             _btnStop.Enabled = running;
             _btnExitIp.Enabled = running && hops.Count > 0;
@@ -571,21 +691,14 @@ public sealed class ChainControlForm : Form
                 _btnStartStrict.Text = running ? "Apply Strict" : "Start Strict";
                 _btnStartStrict.Enabled = canStrict;
             }
-
-            if (_btnStartFailover is not null)
-            {
-                _btnStartFailover.Text = running ? "Apply Fast Failover" : "Start Fast Failover";
-                _btnStartFailover.Enabled = canFailover;
-            }
-
-            if (_btnStartTwoHop is not null)
-                _btnStartTwoHop.Enabled = canTwoHop;
         }
 
         if (!running && canHeaderStart)
         {
             _lblHint.Text = PreferPoolTab()
-                ? "Pool loaded — Start runs Fast Failover using elite-alive candidates only."
+                ? PreferTwoHopMode()
+                    ? "Pool loaded — Start searches an entry→exit pair from candidates matching the eligibility policy."
+                    : "Pool loaded — Start runs Fast Failover using candidates matching the eligibility policy."
                 : "Hops loaded — click Start to run the N-hop chain.";
             _lblHint.Visible = true;
         }
@@ -597,13 +710,38 @@ public sealed class ChainControlForm : Form
         else
         {
             _lblHint.Text = PreferPoolTab()
-                ? "Smart Pool keeps all candidates; Start uses elite-alive ones. Paste adds unchecked entries."
+                ? "Smart Pool keeps all candidates; Start filters by eligibility policy. Choose mode (Fast failover / Auto 2-hop), then Start. Paste adds unchecked entries."
                 : "Add hops on Fixed Chain, then click Start.";
             _lblHint.Visible = true;
         }
     }
 
+    private string FormatActiveHops(IReadOnlyList<ProxyHop> hops, bool running)
+    {
+        if (hops.Count == 0)
+            return "Active hops: (none)";
+
+        if (!running)
+            return "Active hops: " + string.Join(" → ", hops.Select(h => $"{h.Kind} {h.Endpoint}"));
+
+        var parts = new List<string>(hops.Count);
+        for (var i = 0; i < hops.Count; i++)
+        {
+            var h = hops[i];
+            var health = _manager.Health.IsInCooldown(h)
+                ? "cooldown"
+                : _manager.Health.IsHealthy(h)
+                    ? "healthy"
+                    : "degraded";
+            parts.Add($"{i + 1}. {h.Kind} {h.Endpoint} [{health}]");
+        }
+
+        return "Active hops: " + string.Join(" → ", parts);
+    }
+
     private bool PreferPoolTab() => _tabs.SelectedIndex == 1;
+
+    private bool PreferTwoHopMode() => _poolMode.SelectedIndex == 1;
 
     private async Task StartFromHeaderAsync()
     {
@@ -619,7 +757,10 @@ public sealed class ChainControlForm : Form
                 return;
             }
 
-            await StartFastFailoverAsync().ConfigureAwait(true);
+            if (PreferTwoHopMode())
+                await StartPrivacyTwoHopAsync().ConfigureAwait(true);
+            else
+                await StartFastFailoverAsync().ConfigureAwait(true);
             return;
         }
 
@@ -757,21 +898,21 @@ public sealed class ChainControlForm : Form
 
     private void ImportPoolFromSession()
     {
-        var elite = _getAliveResults().Where(IsEliteAlive).ToList();
-        if (elite.Count == 0)
+        var matching = _getAliveResults().Where(MatchesEligibilityPolicy).ToList();
+        if (matching.Count == 0)
         {
             MessageBox.Show(this,
-                "No elite alive proxies in the current session.\n\nSmart Pool only accepts elite proxies.",
+                $"No proxies in the current session match the eligibility policy ({CurrentPolicyLabel()}).",
                 "Proxy Chains",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
             return;
         }
 
-        using var dlg = new PickProxiesDialog(elite, "Add elite proxies to Smart Pool");
+        using var dlg = new PickProxiesDialog(matching, "Add proxies to Smart Pool");
         if (dlg.ShowDialog(this) != DialogResult.OK)
             return;
-        foreach (var r in dlg.Selected.Where(IsEliteAlive))
+        foreach (var r in dlg.Selected.Where(MatchesEligibilityPolicy))
             TryAddPool(ResultToCandidate(r));
     }
 
@@ -786,7 +927,7 @@ public sealed class ChainControlForm : Form
             return;
         }
 
-        var eliteByEndpoint = EliteAliveByEndpoint();
+        var sessionByEndpoint = SessionResultsByEndpoint();
         var added = 0;
         var skipped = 0;
         foreach (var p in parsed)
@@ -794,8 +935,10 @@ public sealed class ChainControlForm : Form
             var hop = ProxyHop.FromParsed(p);
             var key = EndpointKey(hop);
             PoolCandidate candidate;
-            if (eliteByEndpoint.TryGetValue(key, out var elite))
-                candidate = ResultToCandidate(elite);
+            if (sessionByEndpoint.TryGetValue(key, out var matched) && matched.IsAlive)
+                candidate = ResultToCandidate(matched);
+            else if (TryFindSessionResult(hop, out var loose) && loose.IsAlive)
+                candidate = ResultToCandidate(loose);
             else
                 candidate = new PoolCandidate(hop);
 
@@ -833,6 +976,45 @@ public sealed class ChainControlForm : Form
             _poolItems.Remove(item);
     }
 
+    private void RefreshPoolBadges()
+    {
+        _poolItems.ResetBindings();
+        _poolCandidates.Invalidate();
+        _poolCandidates.Refresh();
+    }
+
+    private void RemoveFailedPoolItems()
+    {
+        var sessionByEndpoint = SessionResultsByEndpoint();
+        var removed = 0;
+        for (var i = _poolItems.Count - 1; i >= 0; i--)
+        {
+            var item = _poolItems[i];
+            var hop = item.Candidate.Hop;
+            var failed = false;
+
+            if (sessionByEndpoint.TryGetValue(EndpointKey(hop), out var exact) && !exact.IsAlive)
+                failed = true;
+            else if (TryFindSessionResult(hop, out var loose) && !loose.IsAlive)
+                failed = true;
+            else if (ResolvePoolBadge(item.Candidate) == "[Failed]")
+                failed = true;
+            else if (_manager.Health.IsInCooldown(hop))
+                failed = true;
+
+            if (!failed)
+                continue;
+
+            _poolItems.RemoveAt(i);
+            removed++;
+        }
+
+        if (removed == 0)
+            ShowBanner("No failed or cooldown candidates to remove.", success: true);
+        else
+            ShowBanner($"Removed {removed} failed/cooldown candidate(s).", success: true);
+    }
+
     private void TryAddPool(PoolCandidate candidate)
     {
         if (_poolItems.Any(c => SameEndpoint(c.Candidate.Hop, candidate.Hop)))
@@ -842,46 +1024,71 @@ public sealed class ChainControlForm : Form
 
     private string ResolvePoolBadge(PoolCandidate candidate)
     {
-        var key = EndpointKey(candidate.Hop);
-        foreach (var r in _getAliveResults())
-        {
-            if (!string.Equals(EndpointKey(ResultToHop(r)), key, StringComparison.OrdinalIgnoreCase))
-                continue;
+        var hop = candidate.Hop;
 
-            if (r.Anonymity == AnonymityLevel.Elite)
+        if (_manager.Health.IsInCooldown(hop))
+            return "[Cooldown]";
+
+        if (TryFindSessionResult(hop, out var matched))
+        {
+            if (!matched.IsAlive)
+                return "[Failed]";
+            if (matched.Anonymity == AnonymityLevel.Elite)
                 return "[Elite]";
-            if (r.Anonymity == AnonymityLevel.Anonymous)
+            if (matched.Anonymity == AnonymityLevel.Anonymous)
                 return "[Anon]";
             return "[Alive]";
         }
 
-        // Not in the current alive session set — prior check metadata means stale.
+        // Not in the current session set — prior check metadata means stale.
         if (candidate.LastChecked is not null)
             return "[Stale]";
         return "[Unchecked]";
     }
 
-    private List<PoolCandidate> EligibleEliteCandidates()
+    private List<PoolCandidate> EligibleCandidates()
     {
-        var elite = EliteAliveByEndpoint();
         var list = new List<PoolCandidate>();
         foreach (var item in _poolItems)
         {
-            var key = EndpointKey(item.Candidate.Hop);
-            if (elite.TryGetValue(key, out var checkedElite))
-                list.Add(ResultToCandidate(checkedElite));
+            if (!TryFindSessionResult(item.Candidate.Hop, out var matched))
+                continue;
+            if (!MatchesEligibilityPolicy(matched))
+                continue;
+            list.Add(ResultToCandidate(matched));
         }
 
         return list;
     }
 
+    private bool MatchesEligibilityPolicy(ProxyCheckResult r)
+    {
+        if (!r.IsAlive)
+            return false;
+
+        return _poolEligibility.SelectedIndex switch
+        {
+            1 => r.Anonymity is AnonymityLevel.Elite or AnonymityLevel.Anonymous,
+            2 => true,
+            _ => r.Anonymity == AnonymityLevel.Elite
+        };
+    }
+
+    private string CurrentPolicyLabel() =>
+        _poolEligibility.SelectedIndex switch
+        {
+            1 => "Elite + Anonymous",
+            2 => "Any alive",
+            _ => "Elite only"
+        };
+
     private static bool IsEliteAlive(ProxyCheckResult r) =>
         r.IsAlive && r.Anonymity == AnonymityLevel.Elite;
 
-    private Dictionary<string, ProxyCheckResult> EliteAliveByEndpoint()
+    private Dictionary<string, ProxyCheckResult> SessionResultsByEndpoint()
     {
         var map = new Dictionary<string, ProxyCheckResult>(StringComparer.OrdinalIgnoreCase);
-        foreach (var r in _getAliveResults().Where(IsEliteAlive))
+        foreach (var r in _getAliveResults())
         {
             var key = EndpointKey(ResultToHop(r));
             map.TryAdd(key, r);
@@ -890,9 +1097,58 @@ public sealed class ChainControlForm : Form
         return map;
     }
 
-    private static string EndpointKey(ProxyHop hop) =>
-        $"{hop.Proxy.Host.Trim().TrimStart('[').TrimEnd(']').ToLowerInvariant()}:{hop.Proxy.Port}";
+    private bool TryFindSessionResult(ProxyHop hop, out ProxyCheckResult matched)
+    {
+        var exactKey = EndpointKey(hop);
+        foreach (var r in _getAliveResults())
+        {
+            var resultHop = ResultToHop(r);
+            if (string.Equals(EndpointKey(resultHop), exactKey, StringComparison.OrdinalIgnoreCase))
+            {
+                matched = r;
+                return true;
+            }
+        }
 
+        // Prefer kind/protocol match above; fall back to host:port.
+        var hostPort = HostPortKey(hop);
+        ProxyCheckResult? fallback = null;
+        foreach (var r in _getAliveResults())
+        {
+            var resultHop = ResultToHop(r);
+            if (!string.Equals(HostPortKey(resultHop), hostPort, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (resultHop.Kind == hop.Kind)
+            {
+                matched = r;
+                return true;
+            }
+
+            fallback ??= r;
+        }
+
+        if (fallback is not null)
+        {
+            matched = fallback;
+            return true;
+        }
+
+        matched = null!;
+        return false;
+    }
+
+    private static string EndpointKey(ProxyHop hop)
+    {
+        var host = hop.Proxy.Host.Trim().TrimStart('[').TrimEnd(']').ToLowerInvariant();
+        return $"{host}:{hop.Proxy.Port}:{hop.Kind}";
+    }
+
+    private static string HostPortKey(ProxyHop hop)
+    {
+        var host = hop.Proxy.Host.Trim().TrimStart('[').TrimEnd(']').ToLowerInvariant();
+        return $"{host}:{hop.Proxy.Port}";
+    }
     private void SaveFixedProfile()
     {
         var name = _fixedName.Text.Trim();
@@ -1030,20 +1286,25 @@ public sealed class ChainControlForm : Form
 
     private async Task StartFastFailoverAsync()
     {
-        var eligible = EligibleEliteCandidates();
+        var total = _poolItems.Count;
+        var eligible = EligibleCandidates();
         if (eligible.Count == 0)
         {
             MessageBox.Show(this,
-                "No elite-alive candidates in the pool for Fast Failover.\n\n" +
-                "Import elite proxies from the session, or wait until pasted candidates are checked as elite.",
+                $"0 of {total} eligible under current policy ({CurrentPolicyLabel()}).\n\n" +
+                "Import matching proxies from the session, widen the eligibility policy, or wait until candidates are checked.",
                 "Proxy Chains",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
             return;
         }
 
+        ShowBanner(
+            $"Using {eligible.Count} of {total} candidates (policy: {CurrentPolicyLabel()})",
+            success: true);
+
         var poolName = string.IsNullOrWhiteSpace(_poolName.Text) ? "default-pool" : _poolName.Text.Trim();
-        // Persist the full UI list; start only with eligible elite-alive entries.
+        // Persist the full UI list; start only with policy-eligible entries.
         var allCandidates = _poolItems.Select(i => i.Candidate).ToList();
         try
         {
@@ -1076,16 +1337,25 @@ public sealed class ChainControlForm : Form
 
     private async Task StartPrivacyTwoHopAsync()
     {
-        var eligible = EligibleEliteCandidates();
+        var total = _poolItems.Count;
+        var eligible = EligibleCandidates();
         if (eligible.Count < 2)
         {
             MessageBox.Show(this,
-                "Need at least two elite-alive pool candidates for Auto 2-hop chain.",
+                eligible.Count == 0
+                    ? $"0 of {total} eligible under current policy ({CurrentPolicyLabel()}).\n\n" +
+                      "Need at least two matching candidates for Auto 2-hop."
+                    : $"{eligible.Count} of {total} eligible under current policy ({CurrentPolicyLabel()}).\n\n" +
+                      "Need at least two matching candidates for Auto 2-hop.",
                 "Proxy Chains",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
             return;
         }
+
+        ShowBanner(
+            $"Using {eligible.Count} of {total} candidates (policy: {CurrentPolicyLabel()})",
+            success: true);
 
         using var cts = new CancellationTokenSource();
         using var progress = new PrivacyPairProgressDialog(cts);
@@ -1513,7 +1783,8 @@ public sealed class ChainControlForm : Form
             a.Proxy.Host.Trim().TrimStart('[').TrimEnd(']'),
             b.Proxy.Host.Trim().TrimStart('[').TrimEnd(']'),
             StringComparison.OrdinalIgnoreCase)
-        && a.Proxy.Port == b.Proxy.Port;
+        && a.Proxy.Port == b.Proxy.Port
+        && a.Kind == b.Kind;
 
     private sealed class HopItem(ProxyHop hop)
     {
