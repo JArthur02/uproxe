@@ -81,7 +81,7 @@ public class GeoIpLookupTests
 
         // The attached SOCKS sample resolves for every IP when the MMDB is present.
         Assert.Equal(0, unknown);
-        Assert.Equal("Turkey", geo.LookupCountry("139.28.240.200"));
-        Assert.Equal("United States", geo.LookupCountry("45.38.170.123"));
+        Assert.Equal("Türkiye", geo.LookupCountry("139.28.240.200"));
+        Assert.Equal("Latvia", geo.LookupCountry("45.38.170.123"));
     }
 }

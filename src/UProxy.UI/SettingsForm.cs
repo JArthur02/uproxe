@@ -5,14 +5,14 @@ namespace UProxy.UI;
 public sealed class SettingsForm : Form
 {
     private readonly AppSettings _settings;
-    private readonly NumericUpDown _concurrency = new() { Minimum = 1, Maximum = 256, Width = 80 };
-    private readonly NumericUpDown _timeout = new() { Minimum = 1, Maximum = 120, Width = 80 };
-    private readonly TextBox _judge = new() { Width = 360 };
-    private readonly ComboBox _userAgent = new() { Width = 360, DropDownStyle = ComboBoxStyle.DropDown };
-    private readonly TextBox _httpSources = new() { Width = 360 };
-    private readonly TextBox _socksSources = new() { Width = 360 };
-    private readonly TextBox _geoIp = new() { Width = 360 };
-    private readonly TextBox _truffleHog = new() { Width = 360 };
+    private readonly NumericUpDown _concurrency = new() { Minimum = 1, Maximum = 256, MinimumSize = new Size(80, 0) };
+    private readonly NumericUpDown _timeout = new() { Minimum = 1, Maximum = 120, MinimumSize = new Size(80, 0) };
+    private readonly TextBox _judge = new();
+    private readonly ComboBox _userAgent = new() { DropDownStyle = ComboBoxStyle.DropDown };
+    private readonly TextBox _httpSources = new();
+    private readonly TextBox _socksSources = new();
+    private readonly TextBox _geoIp = new();
+    private readonly TextBox _truffleHog = new();
     private readonly CheckBox _secretVerify = new() { Text = "Verify secrets online (sends candidates to provider APIs)", AutoSize = true };
     private readonly CheckBox _autoCheck = new() { Text = "Auto-check after scrape", AutoSize = true };
     private readonly CheckBox _autoSave = new() { Text = "Remember settings", AutoSize = true };
@@ -28,15 +28,19 @@ public sealed class SettingsForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(480, 470);
+        AutoScaleMode = AutoScaleMode.Dpi;
+        AutoScaleDimensions = new SizeF(96F, 96F);
+        AutoSize = true;
+        AutoSizeMode = AutoSizeMode.GrowAndShrink;
         Font = new Font("Segoe UI", 9f);
+        Padding = new Padding(0);
+        MinimumSize = new Size(560, 0);
 
         _concurrency.Value = settings.Concurrency;
         _timeout.Value = Math.Clamp(settings.TimeoutMs / 1000, 1, 120);
         _judge.Text = settings.JudgeUrl;
         foreach (var (name, value) in UserAgents.Presets)
             _userAgent.Items.Add(new UserAgentItem(name, value));
-        // Show the friendly preset name when the current UA matches one, otherwise the raw string.
         var matchedPreset = UserAgents.Presets.FirstOrDefault(p => p.Value == settings.UserAgent);
         _userAgent.Text = matchedPreset.Value is null ? settings.UserAgent : matchedPreset.Name;
         _httpSources.Text = settings.HttpSourcesPath;
@@ -52,18 +56,38 @@ public sealed class SettingsForm : Form
 
         var layout = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill,
             ColumnCount = 2,
-            Padding = new Padding(12),
-            AutoSize = true
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Padding = new Padding(12, 12, 12, 4),
+            Dock = DockStyle.Top
         };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 140));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
 
         void Row(string label, Control c)
         {
-            layout.Controls.Add(new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left }, 0, layout.RowCount);
+            c.Dock = DockStyle.Fill;
+            c.Margin = new Padding(0, 3, 0, 3);
+            var lbl = new Label
+            {
+                Text = label,
+                AutoSize = true,
+                Anchor = AnchorStyles.Left,
+                Margin = new Padding(0, 6, 8, 0)
+            };
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.Controls.Add(lbl, 0, layout.RowCount);
             layout.Controls.Add(c, 1, layout.RowCount);
+            layout.RowCount++;
+        }
+
+        void CheckRow(CheckBox box)
+        {
+            box.Margin = new Padding(0, 4, 0, 2);
+            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            layout.SetColumnSpan(box, 2);
+            layout.Controls.Add(box, 0, layout.RowCount);
             layout.RowCount++;
         }
 
@@ -75,28 +99,24 @@ public sealed class SettingsForm : Form
         Row("SOCKS sources", _socksSources);
         Row("GeoIP DB", _geoIp);
         Row("TruffleHog path", _truffleHog);
-        layout.SetColumnSpan(_secretVerify, 2);
-        layout.Controls.Add(_secretVerify, 0, layout.RowCount++);
-        layout.SetColumnSpan(_autoCheck, 2);
-        layout.Controls.Add(_autoCheck, 0, layout.RowCount++);
-        layout.SetColumnSpan(_autoSave, 2);
-        layout.Controls.Add(_autoSave, 0, layout.RowCount++);
-        layout.SetColumnSpan(_remoteDns, 2);
-        layout.Controls.Add(_remoteDns, 0, layout.RowCount++);
-        layout.SetColumnSpan(_socks4a, 2);
-        layout.Controls.Add(_socks4a, 0, layout.RowCount++);
-        layout.SetColumnSpan(_fakeIp, 2);
-        layout.Controls.Add(_fakeIp, 0, layout.RowCount++);
+        CheckRow(_secretVerify);
+        CheckRow(_autoCheck);
+        CheckRow(_autoSave);
+        CheckRow(_remoteDns);
+        CheckRow(_socks4a);
+        CheckRow(_fakeIp);
 
         var buttons = new FlowLayoutPanel
         {
-            Dock = DockStyle.Bottom,
             FlowDirection = FlowDirection.RightToLeft,
-            Height = 40,
-            Padding = new Padding(8)
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Dock = DockStyle.Bottom,
+            Padding = new Padding(12, 8, 12, 12),
+            WrapContents = false
         };
-        var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, Width = 80 };
-        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Width = 80 };
+        var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, AutoSize = true, Padding = new Padding(16, 4, 16, 4) };
+        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, AutoSize = true, Padding = new Padding(16, 4, 16, 4), Margin = new Padding(0, 0, 8, 0) };
         ok.Click += (_, _) =>
         {
             _settings.Concurrency = (int)_concurrency.Value;
@@ -120,8 +140,20 @@ public sealed class SettingsForm : Form
         AcceptButton = ok;
         CancelButton = cancel;
 
-        Controls.Add(layout);
-        Controls.Add(buttons);
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Padding = new Padding(0)
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.Controls.Add(layout, 0, 0);
+        root.Controls.Add(buttons, 0, 1);
+        Controls.Add(root);
     }
 
     private static string ResolveUserAgent(string text)

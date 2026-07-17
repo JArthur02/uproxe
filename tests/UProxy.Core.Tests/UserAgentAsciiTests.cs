@@ -33,7 +33,8 @@ public class UserAgentAsciiTests
         var settings = new AppSettings { UserAgent = "μProxy-Tool/2.0" };
         settings.Clamp();
         Assert.True(IsAscii(settings.UserAgent));
-        Assert.Equal("Proxy-Tool/2.0", settings.UserAgent);
+        // AsciiSafe strips "μ" → "Proxy-Tool/2.0", then Clamp migrates that to the default UA.
+        Assert.Equal(UserAgents.Default, settings.UserAgent);
     }
 
     private static bool IsAscii(string s) => s.All(c => c < 128);

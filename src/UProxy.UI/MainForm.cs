@@ -61,6 +61,7 @@ public sealed class MainForm : Form
         ApplySettingsToUi();
         InitGeoIp();
         BuildUi();
+        RestoreWindowPlacement();
         WireEvents();
         UpdateTitle();
         ReportGeoIpStatus();
@@ -228,7 +229,7 @@ public sealed class MainForm : Form
         _grid.Columns.AddRange(
         [
             GridColumn(nameof(ResultRow.Proxy), "Proxy", 160, minWidth: 110),
-            GridColumn(nameof(ResultRow.Country), "Country", 90, minWidth: 72),
+            GridColumn(nameof(ResultRow.Country), "Country", 110, minWidth: 100),
             GridColumn(nameof(ResultRow.Anonymity), "Anonymity", 80, minWidth: 72),
             GridColumn(nameof(ResultRow.Protocol), "Type", 70, minWidth: 60),
             GridColumn(nameof(ResultRow.ConnectMs), "Connect", 70, rightAlign: true, minWidth: 60),
@@ -278,6 +279,51 @@ public sealed class MainForm : Form
         menu.Items.AddRange([file, tools, help]);
         MainMenuStrip = menu;
         Controls.Add(menu);
+    }
+
+    private void RestoreWindowPlacement()
+    {
+        var screens = Screen.AllScreens.Select(s =>
+        {
+            var b = s.WorkingArea;
+            return (b.X, b.Y, b.Width, b.Height);
+        });
+
+        var restored = WindowPlacement.TryRestore(
+            _settings.WindowLeft, _settings.WindowTop,
+            _settings.WindowWidth, _settings.WindowHeight,
+            _settings.WindowMaximized, screens);
+
+        if (restored is null)
+            return;
+
+        Width = restored.Value.Width;
+        Height = restored.Value.Height;
+
+        if (_settings.WindowLeft is int left && _settings.WindowTop is int top)
+        {
+            var point = new Point(left, top);
+            // Require a 40px title-bar sliver on some screen.
+            if (Screen.AllScreens.Any(s => s.WorkingArea.Contains(point.X + 40, point.Y + 40)))
+            {
+                StartPosition = FormStartPosition.Manual;
+                Location = point;
+            }
+            // else keep CenterScreen from BuildUi
+        }
+
+        if (restored.Value.Maximized)
+            WindowState = FormWindowState.Maximized;
+    }
+
+    private void SaveWindowPlacement()
+    {
+        var bounds = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+        _settings.WindowWidth = bounds.Width;
+        _settings.WindowHeight = bounds.Height;
+        _settings.WindowLeft = bounds.Left;
+        _settings.WindowTop = bounds.Top;
+        _settings.WindowMaximized = WindowState == FormWindowState.Maximized;
     }
 
     private static DataGridViewTextBoxColumn GridColumn(
@@ -358,6 +404,7 @@ public sealed class MainForm : Form
             if (_session is not null)
                 await _session.DisposeAsync();
             _geoIp.Dispose();
+            SaveWindowPlacement();
             PersistSettingsFromUi();
         };
         KeyDown += MainForm_KeyDown;

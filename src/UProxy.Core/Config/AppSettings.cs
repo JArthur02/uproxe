@@ -58,6 +58,20 @@ public sealed class AppSettings
     /// </summary>
     public bool SecretScanVerify { get; set; }
 
+    /// <summary>Last main-window width in pixels (null = use default).</summary>
+    public int? WindowWidth { get; set; }
+
+    /// <summary>Last main-window height in pixels (null = use default).</summary>
+    public int? WindowHeight { get; set; }
+
+    /// <summary>Last main-window left edge; null = center.</summary>
+    public int? WindowLeft { get; set; }
+
+    /// <summary>Last main-window top edge; null = center.</summary>
+    public int? WindowTop { get; set; }
+
+    public bool WindowMaximized { get; set; }
+
     public ProxyProtocol PreferredCheckMode =>
         ProxyTypeMode == 1 ? ProxyProtocol.Socks5 : ProxyProtocol.Http;
 
@@ -102,5 +116,13 @@ public sealed class AppSettings
             JudgeUrl = "http://azenv.net";
         // HTTP/1.1 headers must be ASCII; strip any non-ASCII so checks don't throw.
         UserAgent = UserAgents.AsciiSafe(UserAgent);
+        // Migrate UA that lost its leading "μ" via AsciiSafe on an older build.
+        if (UserAgent.StartsWith("Proxy-Tool/", StringComparison.Ordinal))
+            UserAgent = UserAgents.Default;
+
+        if (WindowWidth is < 400)
+            WindowWidth = null;
+        if (WindowHeight is < 300)
+            WindowHeight = null;
     }
 }
