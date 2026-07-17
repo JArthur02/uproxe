@@ -79,6 +79,7 @@ public class UiLayoutGuardTests
         Assert.Contains("SettingsForm.cs", names);
         Assert.Contains("ExportForm.cs", names);
         Assert.Contains("SecretScanForm.cs", names);
+        Assert.Contains("ChainControlForm.cs", names);
     }
 
     [Fact]
@@ -98,6 +99,7 @@ public class UiLayoutGuardTests
     [InlineData("SettingsForm.cs")]
     [InlineData("ExportForm.cs")]
     [InlineData("SecretScanForm.cs")]
+    [InlineData("ChainControlForm.cs")]
     public void DialogForms_UseAutoSizeLayouts(string fileName)
     {
         var src = File.ReadAllText(Path.Combine(UiDir, fileName));

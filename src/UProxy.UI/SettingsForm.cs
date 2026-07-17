@@ -14,6 +14,14 @@ public sealed class SettingsForm : Form
     private readonly TextBox _geoIp = new();
     private readonly TextBox _truffleHog = new();
     private readonly CheckBox _secretVerify = new() { Text = "Verify secrets online (sends candidates to provider APIs)", AutoSize = true };
+    private readonly NumericUpDown _chainHttpPort = new() { Minimum = 1, Maximum = 65535, MinimumSize = new Size(80, 0) };
+    private readonly NumericUpDown _chainSocksPort = new() { Minimum = 1, Maximum = 65535, MinimumSize = new Size(80, 0) };
+    private readonly TextBox _exitIpUrl = new();
+    private readonly CheckBox _chainSystemProxy = new()
+    {
+        Text = "Enable Windows system proxy when gateway starts (local HTTP gateway)",
+        AutoSize = true
+    };
     private readonly CheckBox _autoCheck = new() { Text = "Auto-check after scrape", AutoSize = true };
     private readonly CheckBox _autoSave = new() { Text = "Remember settings", AutoSize = true };
     private readonly CheckBox _remoteDns = new() { Text = "Resolve hostnames through proxy (Fake-IP / remote DNS)", AutoSize = true };
@@ -53,6 +61,10 @@ public sealed class SettingsForm : Form
         _remoteDns.Checked = settings.ResolveHostnamesThroughProxy;
         _socks4a.Checked = settings.UseSocks4a;
         _fakeIp.Checked = settings.EnableFakeIpDns;
+        _chainHttpPort.Value = Math.Clamp(settings.ChainHttpPort, 1, 65535);
+        _chainSocksPort.Value = Math.Clamp(settings.ChainSocksPort, 1, 65535);
+        _exitIpUrl.Text = settings.ExitIpCheckUrl;
+        _chainSystemProxy.Checked = settings.ChainEnableSystemProxy;
 
         var layout = new TableLayoutPanel
         {
@@ -99,12 +111,16 @@ public sealed class SettingsForm : Form
         Row("SOCKS sources", _socksSources);
         Row("GeoIP DB", _geoIp);
         Row("TruffleHog path", _truffleHog);
+        Row("Chain HTTP port", _chainHttpPort);
+        Row("Chain SOCKS port", _chainSocksPort);
+        Row("Exit IP check URL", _exitIpUrl);
         CheckRow(_secretVerify);
         CheckRow(_autoCheck);
         CheckRow(_autoSave);
         CheckRow(_remoteDns);
         CheckRow(_socks4a);
         CheckRow(_fakeIp);
+        CheckRow(_chainSystemProxy);
 
         var buttons = new FlowLayoutPanel
         {
@@ -133,6 +149,12 @@ public sealed class SettingsForm : Form
             _settings.ResolveHostnamesThroughProxy = _remoteDns.Checked;
             _settings.UseSocks4a = _socks4a.Checked;
             _settings.EnableFakeIpDns = _fakeIp.Checked;
+            _settings.ChainHttpPort = (int)_chainHttpPort.Value;
+            _settings.ChainSocksPort = (int)_chainSocksPort.Value;
+            _settings.ExitIpCheckUrl = string.IsNullOrWhiteSpace(_exitIpUrl.Text)
+                ? "https://api.ipify.org"
+                : _exitIpUrl.Text.Trim();
+            _settings.ChainEnableSystemProxy = _chainSystemProxy.Checked;
             _settings.Clamp();
         };
         buttons.Controls.Add(ok);

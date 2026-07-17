@@ -1,9 +1,12 @@
 using System.ComponentModel;
+using UProxy.Core.Chaining;
 using UProxy.Core.Checking;
 using UProxy.Core.Config;
 using UProxy.Core.Exporting;
+using UProxy.Core.Gateway;
 using UProxy.Core.GeoIp;
 using UProxy.Core.Models;
+using UProxy.Core.Persistence;
 using UProxy.Core.Scraping;
 using UProxy.Core.Sessions;
 using UProxy.Core.Windows;
@@ -19,6 +22,12 @@ public sealed class MainForm : Form
     private WorkSession? _session;
     private IGeoIpResolver _geoIp = NullGeoIpResolver.Instance;
     private readonly WindowsProxyManager _proxyManager = new();
+    private readonly ChainGatewayHost _chainGateway = new();
+    private readonly ChainManager _chainManager = new();
+    private readonly AppDataLayout _appData;
+    private readonly ProtectedCredentialStore _credentialStore;
+    private readonly ChainProfileStore _chainProfileStore;
+    private readonly PoolStore _poolStore;
     private readonly SynchronizationContext _ui;
 
     private readonly BufferedDataGridView _grid = new();
@@ -38,7 +47,7 @@ public sealed class MainForm : Form
     private readonly Button _btnStop = new() { Text = "Stop", AutoSize = true, Enabled = false };
     private readonly Button _btnExport = new() { Text = "Export", AutoSize = true };
     private readonly Button _btnSettings = new() { Text = "Settings", AutoSize = true };
-    private readonly Button _btnSetProxy = new() { Text = "Set System Proxy…", AutoSize = true };
+    private readonly Button _btnSetProxy = new() { Text = "Proxy Chains…", AutoSize = true };
     private readonly Button _btnResetProxy = new() { Text = "Emergency Reset", AutoSize = true };
     private FlowLayoutPanel? _topBar;
     private FlowLayoutPanel? _actionBar;
@@ -57,6 +66,13 @@ public sealed class MainForm : Form
         AutoScaleDimensions = new SizeF(96F, 96F);
 
         _settings = AppSettings.Load(_settingsPath);
+        _appData = new AppDataLayout();
+        _appData.EnsureDirectories();
+        _credentialStore = new ProtectedCredentialStore(_appData);
+        _chainProfileStore = new ChainProfileStore(_appData, _credentialStore);
+        _poolStore = new PoolStore(_appData, _credentialStore);
+        _chainGateway.HttpPort = _settings.ChainHttpPort;
+        _chainGateway.SocksPort = _settings.ChainSocksPort;
         ResolvePaths();
         ApplySettingsToUi();
         InitGeoIp();
@@ -268,12 +284,15 @@ public sealed class MainForm : Form
         file.DropDownItems.Add("Exit", null, (_, _) => Close());
         var tools = new ToolStripMenuItem("Tools");
         tools.DropDownItems.Add("Settings…", null, (_, _) => OpenSettings());
+        tools.DropDownItems.Add("Proxy Chains…", null, (_, _) => OpenProxyChains());
         tools.DropDownItems.Add("Scan for secrets (TruffleHog)…", null, (_, _) => OpenSecretScanner());
         tools.DropDownItems.Add("Emergency Reset System Proxy", null, (_, _) => EmergencyReset());
         var help = new ToolStripMenuItem("Help");
         help.DropDownItems.Add("About μProxy Tool 2.0", null, (_, _) =>
             MessageBox.Show(
                 "μProxy Tool 2.0\n\nProxy scraper & checker.\n" +
+                "v3 proxychains development build — local TCP-only HTTP/SOCKS gateway.\n" +
+                "No UDP/TUN/WFP; system proxy (optional) points at the local HTTP gateway only.\n\n" +
                 "No update phone-home. GeoIP is local-only.\n" +
                 "System proxy changes are opt-in with restore.\n\n" +
                 "Based on the μProxy Tool 1.81 feature set.",
@@ -368,6 +387,10 @@ public sealed class MainForm : Form
         menu.Items.Add("Select all", null, (_, _) => _grid.SelectAll());
         menu.Items.Add("Export results…", null, (_, _) => ExportResults());
         menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Open Proxy Chains…", null, (_, _) => OpenProxyChains());
+        menu.Items.Add("Add to Fixed Chain…", null, (_, _) => OpenProxyChains(seedFixed: GetSelectedAliveResults()));
+        menu.Items.Add("Add to Smart Pool…", null, (_, _) => OpenProxyChains(seedPool: GetSelectedAliveResults()));
+        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Clear results", null, (_, _) =>
         {
             EnsureSession();
@@ -399,12 +422,14 @@ public sealed class MainForm : Form
         };
         _btnExport.Click += (_, _) => ExportResults();
         _btnSettings.Click += (_, _) => OpenSettings();
-        _btnSetProxy.Click += (_, _) => SetSystemProxyOptIn();
+        _btnSetProxy.Click += (_, _) => OpenProxyChains();
         _btnResetProxy.Click += (_, _) => EmergencyReset();
-        FormClosing += async (_, e) =>
+        FormClosing += (_, _) =>
         {
             if (_session is not null)
-                await _session.DisposeAsync();
+                _session.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            if (_chainGateway.IsRunning)
+                _chainGateway.StopAsync().GetAwaiter().GetResult();
             _geoIp.Dispose();
             SaveWindowPlacement();
             PersistSettingsFromUi();
@@ -481,7 +506,8 @@ public sealed class MainForm : Form
             LatencyMs = result.LatencyMs,
             Auth = FormatAuthShort(result.AuthMethod),
             Detail = result.IsAlive ? "" : FailureMessages.Describe(result.Failure, result.ErrorMessage),
-            AnonLevel = result.Anonymity
+            AnonLevel = result.Anonymity,
+            Source = result
         });
         _btnExport.Enabled = true;
     }
@@ -557,7 +583,10 @@ public sealed class MainForm : Form
     {
         var p = proxies ?? _session?.Proxies.Count ?? 0;
         var a = alive ?? _rows.Count;
-        Text = $"μProxy Tool 2.0 [{p} loaded / {a} alive]";
+        var title = $"μProxy Tool 2.0 [{p} loaded / {a} alive]";
+        if (_chainGateway.IsRunning)
+            title += $" [gateway :{_chainGateway.HttpPort}/:{_chainGateway.SocksPort}]";
+        Text = title;
     }
 
     private void LoadProxies()
@@ -697,6 +726,8 @@ public sealed class MainForm : Form
             ResolvePaths();
             InitGeoIp();
             ReportGeoIpStatus();
+            _chainGateway.HttpPort = _settings.ChainHttpPort;
+            _chainGateway.SocksPort = _settings.ChainSocksPort;
             _settings.Save(_settingsPath);
             if (_session is not null)
             {
@@ -729,48 +760,48 @@ public sealed class MainForm : Form
             _session.Proxies.Select(p => p.ToExportString(includeCredentials: true)));
     }
 
-    private void SetSystemProxyOptIn()
+    private void OpenProxyChains(
+        IReadOnlyList<ProxyCheckResult>? seedFixed = null,
+        IReadOnlyList<ProxyCheckResult>? seedPool = null)
     {
-        if (!_proxyManager.IsSupported)
-        {
-            MessageBox.Show("System proxy is only available on Windows.", "μProxy Tool",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return;
-        }
+        PersistSettingsFromUi();
+        _chainGateway.HttpPort = _settings.ChainHttpPort;
+        _chainGateway.SocksPort = _settings.ChainSocksPort;
 
-        if (_grid.CurrentRow?.DataBoundItem is not ResultRow row)
-        {
-            MessageBox.Show("Select an alive proxy in the list first.", "μProxy Tool",
-                MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
+        using var form = new ChainControlForm(
+            _settings,
+            GetAliveResults,
+            _chainGateway,
+            _chainManager,
+            _appData,
+            _chainProfileStore,
+            _poolStore,
+            _credentialStore,
+            _settingsPath,
+            seedFixed,
+            seedPool);
+        form.ShowDialog(this);
+        UpdateTitle();
+        if (_chainGateway.IsRunning)
+            SetStatus($"Chain gateway active — HTTP :{_chainGateway.HttpPort}, SOCKS :{_chainGateway.SocksPort}");
+    }
 
-        var warn = MessageBox.Show(
-            "WARNING — privacy & connectivity\n\n" +
-            $"This will set your Windows (WinINET) system proxy to:\n  {row.Proxy}\n\n" +
-            "• Your browser/apps using system proxy will send traffic through this public proxy.\n" +
-            "• The proxy operator may see your destinations.\n" +
-            "• Your previous settings will be saved and can be restored with Emergency Reset.\n\n" +
-            "Continue?",
-            "Set System Proxy — Opt-in",
-            MessageBoxButtons.YesNo,
-            MessageBoxIcon.Warning,
-            MessageBoxDefaultButton.Button2);
+    private IReadOnlyList<ProxyCheckResult> GetAliveResults()
+    {
+        return _rows
+            .Where(r => r.Source is { IsAlive: true })
+            .Select(r => r.Source!)
+            .ToList();
+    }
 
-        if (warn != DialogResult.Yes)
-            return;
-
-        try
-        {
-            _proxyManager.SetProxyOptIn(row.Proxy);
-            Text = $"μProxy Tool 2.0 [{row.Proxy} — system proxy ACTIVE]";
-            SetStatus($"System proxy set to {row.Proxy}. Use Emergency Reset to restore.");
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show("Failed to set proxy: " + ex.Message, "μProxy Tool",
-                MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
+    private IReadOnlyList<ProxyCheckResult> GetSelectedAliveResults()
+    {
+        return _grid.SelectedRows
+            .Cast<DataGridViewRow>()
+            .Select(r => r.DataBoundItem as ResultRow)
+            .Where(r => r?.Source is { IsAlive: true })
+            .Select(r => r!.Source!)
+            .ToList();
     }
 
     private void EmergencyReset()
@@ -780,6 +811,16 @@ public sealed class MainForm : Form
 
         try
         {
+            if (_chainGateway.IsRunning && _chainGateway.SystemProxyActive)
+            {
+                _chainGateway.StopAsync().GetAwaiter().GetResult();
+                MessageBox.Show("Chain gateway stopped and Windows proxy restored.", "μProxy Tool",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                UpdateTitle();
+                SetStatus("System proxy reset (gateway stopped).");
+                return;
+            }
+
             if (_proxyManager.HasPendingRestore)
             {
                 _proxyManager.Restore();
@@ -830,5 +871,6 @@ public sealed class MainForm : Form
         public string Auth { get; set; } = "";
         public string Detail { get; set; } = "";
         public AnonymityLevel AnonLevel { get; set; } = AnonymityLevel.Unknown;
+        public ProxyCheckResult? Source { get; init; }
     }
 }
