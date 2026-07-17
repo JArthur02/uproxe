@@ -1,4 +1,4 @@
-5a523d464ffa84046fea96235b97e0804da27b1b9415cc3213e3cfd479e05039  uProxyTool-2.0-v3-proxychains-preview-win-x64-framework-dependent.zip
-fce8e3eec207c83f28987fde389eca0e64e5dc97d8211038d9086bdca978a1d6  uProxyTool-2.0-v3-proxychains-preview-win-x64-selfcontained.zip
-5a523d464ffa84046fea96235b97e0804da27b1b9415cc3213e3cfd479e05039  uProxyTool-2.0-win-x64-framework-dependent.zip
-fce8e3eec207c83f28987fde389eca0e64e5dc97d8211038d9086bdca978a1d6  uProxyTool-2.0-win-x64-selfcontained.zip
+cdc80f88a20292c13b449b02cbfd19dca847ae8529d68688ae31c808ad261355  uProxyTool-2.0-v3-proxychains-preview-win-x64-framework-dependent.zip
+518435dfa5074b25d4213a2291a6c250cfa76efd67e7bfaf39d0024d380a55ed  uProxyTool-2.0-v3-proxychains-preview-win-x64-selfcontained.zip
+cdc80f88a20292c13b449b02cbfd19dca847ae8529d68688ae31c808ad261355  uProxyTool-2.0-win-x64-framework-dependent.zip
+518435dfa5074b25d4213a2291a6c250cfa76efd67e7bfaf39d0024d380a55ed  uProxyTool-2.0-win-x64-selfcontained.zip
