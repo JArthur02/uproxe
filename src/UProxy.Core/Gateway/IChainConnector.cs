@@ -32,6 +32,20 @@ public sealed class ChainDialerConnector : IChainConnector
         _dialer.ConnectAsync(_hops, destination, cancellationToken, _overallTimeout);
 }
 
+/// <summary>Adapts <see cref="ChainManager"/> to <see cref="IChainConnector"/> for local gateways.</summary>
+public sealed class ChainManagerConnector : IChainConnector
+{
+    private readonly ChainManager _manager;
+
+    public ChainManagerConnector(ChainManager manager)
+    {
+        _manager = manager ?? throw new ArgumentNullException(nameof(manager));
+    }
+
+    public Task<Stream> ConnectAsync(ChainDestination destination, CancellationToken cancellationToken) =>
+        _manager.ConnectAsync(destination, cancellationToken);
+}
+
 /// <summary>Direct TCP connect (no proxy hops) — useful for unit tests.</summary>
 public sealed class DirectTcpConnector : IChainConnector
 {

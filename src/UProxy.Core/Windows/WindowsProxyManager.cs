@@ -67,6 +67,18 @@ public sealed class WindowsProxyManager
         NotifyWinInet();
     }
 
+    /// <summary>Point WinINET HTTP/HTTPS at the local uProxe HTTP gateway. Starts backup first.</summary>
+    public void SetLocalGateway(int httpPort, string host = "127.0.0.1")
+    {
+        if (httpPort is < 1 or > 65535)
+            throw new ArgumentOutOfRangeException(nameof(httpPort));
+        if (string.IsNullOrWhiteSpace(host))
+            throw new ArgumentException("Host is required.", nameof(host));
+
+        // Classic WinINET dual form so HTTP and HTTPS both use the local gateway.
+        SetProxyOptIn($"http={host}:{httpPort};https={host}:{httpPort}");
+    }
+
     /// <summary>Restores the exact captured snapshot (from memory or backup file).</summary>
     public void Restore(WinInetProxySnapshot? snapshot = null)
     {

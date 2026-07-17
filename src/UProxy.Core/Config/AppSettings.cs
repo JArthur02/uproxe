@@ -6,7 +6,7 @@ namespace UProxy.Core.Config;
 
 public sealed class AppSettings
 {
-    public const int CurrentVersion = 1;
+    public const int CurrentVersion = 2;
 
     public int Version { get; set; } = CurrentVersion;
 
@@ -72,6 +72,21 @@ public sealed class AppSettings
 
     public bool WindowMaximized { get; set; }
 
+    /// <summary>Local HTTP chain gateway port (loopback).</summary>
+    public int ChainHttpPort { get; set; } = 8877;
+
+    /// <summary>Local SOCKS5 chain gateway port (loopback).</summary>
+    public int ChainSocksPort { get; set; } = 8878;
+
+    /// <summary>When true (Windows), opt-in WinINET to the local HTTP gateway after listeners start.</summary>
+    public bool ChainEnableSystemProxy { get; set; }
+
+    /// <summary>Persisted id of the last active chain profile (if any).</summary>
+    public string? ActiveChainProfileId { get; set; }
+
+    /// <summary>URL used to verify exit IP after enabling a chain.</summary>
+    public string ExitIpCheckUrl { get; set; } = "https://api.ipify.org";
+
     public ProxyProtocol PreferredCheckMode =>
         ProxyTypeMode == 1 ? ProxyProtocol.Socks5 : ProxyProtocol.Http;
 
@@ -124,5 +139,10 @@ public sealed class AppSettings
             WindowWidth = null;
         if (WindowHeight is < 300)
             WindowHeight = null;
+
+        ChainHttpPort = Math.Clamp(ChainHttpPort, 1, 65_535);
+        ChainSocksPort = Math.Clamp(ChainSocksPort, 1, 65_535);
+        if (string.IsNullOrWhiteSpace(ExitIpCheckUrl))
+            ExitIpCheckUrl = "https://api.ipify.org";
     }
 }
