@@ -24,6 +24,7 @@ public sealed class MainForm : Form
     private readonly WindowsProxyManager _proxyManager = new();
     private readonly ChainGatewayHost _chainGateway = new();
     private readonly ChainManager _chainManager = new();
+    private readonly RoutingUiState _routing = new();
     private readonly AppDataLayout _appData;
     private readonly ProtectedCredentialStore _credentialStore;
     private readonly ChainProfileStore _chainProfileStore;
@@ -47,9 +48,14 @@ public sealed class MainForm : Form
     private readonly Button _btnStop = new() { Text = "Stop", AutoSize = true, Enabled = false };
     private readonly Button _btnExport = new() { Text = "Export", AutoSize = true };
     private readonly Button _btnSettings = new() { Text = "Settings", AutoSize = true };
-    private readonly Button _btnSetProxy = new() { Text = "Set System Proxy…", AutoSize = true };
-    private readonly Button _btnProxyChains = new() { Text = "Proxy Chains…", AutoSize = true };
+    private readonly Button _btnProxyChains = new() { Text = "Routing…", AutoSize = true };
     private readonly Button _btnResetProxy = new() { Text = "Emergency Reset", AutoSize = true };
+    private readonly ToolStripStatusLabel _routingLabel = new()
+    {
+        BorderSides = ToolStripStatusLabelBorderSides.Left,
+        BorderStyle = Border3DStyle.Etched,
+        Text = "Routing: Off"
+    };
     private FlowLayoutPanel? _topBar;
     private FlowLayoutPanel? _actionBar;
 
@@ -214,7 +220,7 @@ public sealed class MainForm : Form
         foreach (var btn in new[]
                  {
                      _btnLoad, _btnScrape, _btnCheck, _btnStop, _btnExport, _btnSettings,
-                     _btnSetProxy, _btnProxyChains, _btnResetProxy
+                     _btnProxyChains, _btnResetProxy
                  })
         {
             btn.Margin = new Padding(2);
@@ -269,7 +275,7 @@ public sealed class MainForm : Form
         _progress.AutoSize = false;
         _progress.Width = 140;
         _percentLabel.Text = "0 %";
-        _status.Items.AddRange([_statusLabel, _countsLabel, _progress, _percentLabel]);
+        _status.Items.AddRange([_statusLabel, _routingLabel, _countsLabel, _progress, _percentLabel]);
         _status.Dock = DockStyle.Bottom;
 
         Controls.Add(_grid);
@@ -285,18 +291,20 @@ public sealed class MainForm : Form
         file.DropDownItems.Add("Exit", null, (_, _) => Close());
         var tools = new ToolStripMenuItem("Tools");
         tools.DropDownItems.Add("Settings…", null, (_, _) => OpenSettings());
-        tools.DropDownItems.Add("Set System Proxy…", null, (_, _) => SetSystemProxyOptIn());
-        tools.DropDownItems.Add("Proxy Chains…", null, (_, _) => OpenProxyChains());
+        tools.DropDownItems.Add("Routing (Proxy Chains)…", null, (_, _) => OpenProxyChains());
+        var advanced = new ToolStripMenuItem("Advanced");
+        advanced.DropDownItems.Add("Single external proxy (advanced)…", null, (_, _) => SetSystemProxyOptIn());
+        advanced.DropDownItems.Add("Emergency Reset System Proxy", null, (_, _) => EmergencyReset());
+        tools.DropDownItems.Add(advanced);
         tools.DropDownItems.Add("Scan for secrets (TruffleHog)…", null, (_, _) => OpenSecretScanner());
-        tools.DropDownItems.Add("Emergency Reset System Proxy", null, (_, _) => EmergencyReset());
         var help = new ToolStripMenuItem("Help");
         help.DropDownItems.Add("About μProxy Tool 2.0", null, (_, _) =>
             MessageBox.Show(
                 "μProxy Tool 2.0\n\nProxy scraper & checker.\n" +
-                "• Set System Proxy — point WinINET at a selected alive proxy (opt-in).\n" +
-                "• Proxy Chains — local HTTP/SOCKS gateway with multi-hop / failover (alternative).\n\n" +
-                "No update phone-home. GeoIP is local-only.\n" +
-                "System proxy changes are opt-in with restore.\n\n" +
+                "• Routing (Proxy Chains) — local HTTP/SOCKS gateway with multi-hop / failover.\n" +
+                "• Advanced → Single external proxy — optional WinINET shortcut (not for SOCKS).\n\n" +
+                "Does not route every Windows app and does not route UDP.\n" +
+                "No update phone-home. GeoIP is local-only.\n\n" +
                 "Based on the μProxy Tool 1.81 feature set.",
                 "About", MessageBoxButtons.OK, MessageBoxIcon.Information));
         menu.Items.AddRange([file, tools, help]);
@@ -389,11 +397,11 @@ public sealed class MainForm : Form
         menu.Items.Add("Select all", null, (_, _) => _grid.SelectAll());
         menu.Items.Add("Export results…", null, (_, _) => ExportResults());
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Set System Proxy…", null, (_, _) => SetSystemProxyOptIn());
-        menu.Items.Add("Open Proxy Chains…", null, (_, _) => OpenProxyChains());
+        menu.Items.Add("Open Routing (Proxy Chains)…", null, (_, _) => OpenProxyChains());
         menu.Items.Add("Add to Fixed Chain…", null, (_, _) => OpenProxyChains(seedFixed: GetSelectedAliveResults()));
         menu.Items.Add("Add elite to Smart Pool…", null, (_, _) =>
             OpenProxyChains(seedPool: GetSelectedAliveResults().Where(r => r.IsAlive && r.Anonymity == AnonymityLevel.Elite).ToList()));
+        menu.Items.Add("Single external proxy (advanced)…", null, (_, _) => SetSystemProxyOptIn());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Clear results", null, (_, _) =>
         {
@@ -426,19 +434,37 @@ public sealed class MainForm : Form
         };
         _btnExport.Click += (_, _) => ExportResults();
         _btnSettings.Click += (_, _) => OpenSettings();
-        _btnSetProxy.Click += (_, _) => SetSystemProxyOptIn();
         _btnProxyChains.Click += (_, _) => OpenProxyChains();
         _btnResetProxy.Click += (_, _) => EmergencyReset();
-        FormClosing += (_, _) =>
+        _routing.Changed += () => _ui.Post(_ => RefreshRoutingChip(), null);
+        FormClosing += (_, e) =>
         {
+            if (_chainGateway.IsRunning)
+            {
+                var answer = MessageBox.Show(
+                    "Local gateway routing is still active.\n\n" +
+                    "Closing the app will stop the gateway and restore Windows proxy settings.\n\nContinue?",
+                    "μProxy Tool",
+                    MessageBoxButtons.OKCancel,
+                    MessageBoxIcon.Warning,
+                    MessageBoxDefaultButton.Button2);
+                if (answer != DialogResult.OK)
+                {
+                    e.Cancel = true;
+                    return;
+                }
+            }
+
             if (_session is not null)
                 _session.DisposeAsync().AsTask().GetAwaiter().GetResult();
             if (_chainGateway.IsRunning)
                 _chainGateway.StopAsync().GetAwaiter().GetResult();
+            _routing.SetOff();
             _geoIp.Dispose();
             SaveWindowPlacement();
             PersistSettingsFromUi();
         };
+        // Replace previous FormClosing that was registered in WireEvents — remove duplicate below.
         KeyDown += MainForm_KeyDown;
         KeyPreview = true;
     }
@@ -574,7 +600,6 @@ public sealed class MainForm : Form
         _btnCheck.Enabled = !busy;
         _btnExport.Enabled = !busy && _rows.Count > 0;
         _btnSettings.Enabled = !busy;
-        _btnSetProxy.Enabled = !busy;
         _btnProxyChains.Enabled = !busy;
         _btnResetProxy.Enabled = !busy;
         _btnStop.Enabled = busy;
@@ -587,16 +612,24 @@ public sealed class MainForm : Form
 
     private void SetStatus(string text) => _statusLabel.Text = text;
 
+    private void RefreshRoutingChip()
+    {
+        _routingLabel.Text = _routing.Summary;
+        _routingLabel.ForeColor = _routing.Status switch
+        {
+            RoutingUiState.Phase.Verified => Color.FromArgb(0, 100, 0),
+            RoutingUiState.Phase.NotVerified => Color.FromArgb(140, 40, 20),
+            RoutingUiState.Phase.Starting or RoutingUiState.Phase.TunnelUp => Color.FromArgb(120, 80, 0),
+            _ => SystemColors.ControlText
+        };
+        UpdateTitle();
+    }
+
     private void UpdateTitle(int? proxies = null, int? alive = null)
     {
         var p = proxies ?? _session?.Proxies.Count ?? 0;
-        var a = alive ?? _rows.Count;
-        var title = $"μProxy Tool 2.0 [{p} loaded / {a} alive]";
-        if (_proxyManager.IsSupported && _proxyManager.HasPendingRestore && !_chainGateway.SystemProxyActive)
-            title += " [system proxy ACTIVE]";
-        if (_chainGateway.IsRunning)
-            title += $" [gateway :{_chainGateway.HttpPort}/:{_chainGateway.SocksPort}]";
-        Text = title;
+        var aliveCount = alive ?? _rows.Count(r => r.Source is { IsAlive: true });
+        Text = $"μProxy Tool 2.0 — {p} loaded / {aliveCount} alive";
     }
 
     private void SetSystemProxyOptIn()
@@ -608,19 +641,56 @@ public sealed class MainForm : Form
             return;
         }
 
-        if (_grid.CurrentRow?.DataBoundItem is not ResultRow row)
+        if (_grid.CurrentRow?.DataBoundItem is not ResultRow row || row.Source is null)
         {
-            MessageBox.Show("Select an alive proxy in the list first.", "μProxy Tool",
+            MessageBox.Show("Select a checked proxy result in the list first.", "μProxy Tool",
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
+        }
+
+        var source = row.Source;
+        if (!source.IsAlive)
+        {
+            MessageBox.Show("That result is not alive. Check proxies again and select a live HTTP/HTTPS row.",
+                "μProxy Tool", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        var protocol = source.ConfirmedProtocol != ProxyProtocol.Unknown
+            ? source.ConfirmedProtocol
+            : source.Proxy.Protocol;
+        var isHttp = protocol is ProxyProtocol.Http or ProxyProtocol.Https;
+        if (!isHttp)
+        {
+            MessageBox.Show(
+                "Windows system proxy cannot use a bare SOCKS endpoint.\n\n" +
+                "Use Routing… (Proxy Chains) so apps talk to the local HTTP gateway, " +
+                "which can then use SOCKS hops.",
+                "Single external proxy",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
+        if (source.Anonymity is not (AnonymityLevel.Elite or AnonymityLevel.Anonymous))
+        {
+            var allowLower = MessageBox.Show(
+                $"Selected proxy anonymity is {source.Anonymity} (not Elite/Anonymous).\n\n" +
+                "Advanced override: continue anyway?",
+                "Single external proxy — advanced",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2);
+            if (allowLower != DialogResult.Yes)
+                return;
         }
 
         if (_chainGateway.IsRunning && _chainGateway.SystemProxyActive)
         {
             var stopGw = MessageBox.Show(
-                "Proxy Chains currently owns the Windows system proxy (local gateway).\n\n" +
-                "Stop the gateway and set system proxy to the selected result instead?",
-                "Set System Proxy",
+                "Proxy Chains currently owns automatic Windows routing.\n\n" +
+                "Stop the gateway and apply this single external proxy instead?",
+                "Single external proxy",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning,
                 MessageBoxDefaultButton.Button2);
@@ -630,6 +700,7 @@ public sealed class MainForm : Form
             try
             {
                 _chainGateway.StopAsync().GetAwaiter().GetResult();
+                _routing.SetOff();
             }
             catch (Exception ex)
             {
@@ -639,15 +710,22 @@ public sealed class MainForm : Form
             }
         }
 
+        var age = source.CheckedAt == default
+            ? "unknown"
+            : $"{Math.Max(0, (int)(DateTimeOffset.UtcNow - source.CheckedAt).TotalMinutes)} min ago";
         var warn = MessageBox.Show(
             "WARNING — privacy & connectivity\n\n" +
-            $"This will set your Windows (WinINET) system proxy to:\n  {row.Proxy}\n\n" +
-            "• Your browser/apps using system proxy will send traffic through this public proxy.\n" +
-            "• The proxy operator may see your destinations.\n" +
-            "• Your previous settings will be saved and can be restored with Emergency Reset.\n\n" +
-            "Prefer multi-hop / local gateway? Use Proxy Chains… instead.\n\n" +
+            $"Set Windows proxy to:\n  {source.Proxy.Endpoint}\n\n" +
+            $"Protocol: {protocol}\n" +
+            $"Anonymity: {source.Anonymity}\n" +
+            $"Country: {source.Country}\n" +
+            $"Latency: {source.LatencyMs} ms\n" +
+            $"Checked: {age}\n\n" +
+            "• Apps that use Windows proxy settings will send traffic through this public proxy.\n" +
+            "• This does not route every Windows app and does not route UDP.\n" +
+            "• Prefer Routing… (Proxy Chains) for local gateway / multi-hop.\n\n" +
             "Continue?",
-            "Set System Proxy — Opt-in",
+            "Single external proxy — opt-in",
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Warning,
             MessageBoxDefaultButton.Button2);
@@ -657,9 +735,9 @@ public sealed class MainForm : Form
 
         try
         {
-            _proxyManager.SetProxyOptIn(row.Proxy);
-            UpdateTitle();
-            SetStatus($"System proxy set to {row.Proxy}. Use Emergency Reset to restore.");
+            _proxyManager.SetProxyOptIn(source.Proxy.Endpoint);
+            RefreshRoutingChip();
+            SetStatus($"Single external proxy set to {source.Proxy.Endpoint}. Use Emergency Reset to restore.");
         }
         catch (Exception ex)
         {
@@ -852,6 +930,7 @@ public sealed class MainForm : Form
             GetAliveResults,
             _chainGateway,
             _chainManager,
+            _routing,
             _appData,
             _chainProfileStore,
             _poolStore,
@@ -860,9 +939,8 @@ public sealed class MainForm : Form
             seedFixed,
             seedPool);
         form.ShowDialog(this);
-        UpdateTitle();
-        if (_chainGateway.IsRunning)
-            SetStatus($"Chain gateway active — HTTP :{_chainGateway.HttpPort}, SOCKS :{_chainGateway.SocksPort}");
+        RefreshRoutingChip();
+        SetStatus(_routing.Summary);
     }
 
     private IReadOnlyList<ProxyCheckResult> GetAliveResults()
@@ -893,10 +971,11 @@ public sealed class MainForm : Form
             if (_chainGateway.IsRunning && _chainGateway.SystemProxyActive)
             {
                 _chainGateway.StopAsync().GetAwaiter().GetResult();
+                _routing.SetOff();
                 MessageBox.Show("Chain gateway stopped and Windows proxy restored.", "μProxy Tool",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
-                UpdateTitle();
-                SetStatus("System proxy reset (gateway stopped).");
+                RefreshRoutingChip();
+                SetStatus("Routing Off (gateway stopped).");
                 return;
             }
 
@@ -908,16 +987,13 @@ public sealed class MainForm : Form
             }
             else
             {
-                var snap = _proxyManager.Capture();
-                snap.ProxyEnable = 0;
-                snap.ProxyServer = "";
-                _proxyManager.SaveBackup(snap);
-                _proxyManager.Restore(snap);
-                _proxyManager.ClearBackup();
-                MessageBox.Show("System proxy disabled (no prior backup found).", "μProxy Tool",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(
+                    "No Windows proxy backup is pending. Nothing to restore.",
+                    "μProxy Tool",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
             }
-            UpdateTitle();
+            RefreshRoutingChip();
             SetStatus("System proxy reset.");
         }
         catch (Exception ex)

@@ -21,16 +21,19 @@ public sealed class ChainControlForm : Form
     private readonly Func<IReadOnlyList<ProxyCheckResult>> _getAliveResults;
     private readonly ChainGatewayHost _gateway;
     private readonly ChainManager _manager;
+    private readonly RoutingUiState _routing;
     private readonly AppDataLayout _layout;
     private readonly ProtectedCredentialStore _credentials;
     private readonly ChainProfileStore _profiles;
     private readonly PoolStore _pools;
     private readonly WindowsProxyManager _winProxy = new();
+    private bool _busy;
 
     private readonly Label _lblMode = new() { AutoSize = true };
     private readonly Label _lblHttp = new() { AutoSize = true };
     private readonly Label _lblSocks = new() { AutoSize = true };
     private readonly Label _lblWinInet = new() { AutoSize = true };
+    private readonly Label _lblRouting = new() { AutoSize = true, MaximumSize = new Size(720, 0) };
     private readonly Label _lblState = new() { AutoSize = true };
     private readonly Label _lblHops = new() { AutoSize = true, MaximumSize = new Size(680, 0) };
     private readonly Label _lblHint = new()
@@ -39,10 +42,19 @@ public sealed class ChainControlForm : Form
         ForeColor = Color.FromArgb(120, 70, 20),
         MaximumSize = new Size(720, 0)
     };
+    private readonly Label _lblBanner = new()
+    {
+        AutoSize = true,
+        MaximumSize = new Size(720, 0),
+        Visible = false,
+        Margin = new Padding(0, 4, 0, 0)
+    };
     private readonly Button _btnStart = new() { Text = "Start", AutoSize = true };
     private readonly Button _btnStop = new() { Text = "Stop", AutoSize = true };
     private readonly Button _btnRestore = new() { Text = "Restore Windows Proxy", AutoSize = true };
     private readonly Button _btnExitIp = new() { Text = "Check Exit IP", AutoSize = true };
+    private readonly Button _btnCopyHttp = new() { Text = "Copy HTTP", AutoSize = true };
+    private readonly Button _btnCopySocks = new() { Text = "Copy SOCKS", AutoSize = true };
 
     private readonly TabControl _tabs = new() { Dock = DockStyle.Fill };
     private readonly ListBox _fixedHops = new() { IntegralHeight = false, Dock = DockStyle.Fill };
@@ -62,6 +74,7 @@ public sealed class ChainControlForm : Form
         Func<IReadOnlyList<ProxyCheckResult>> getAliveResults,
         ChainGatewayHost gateway,
         ChainManager manager,
+        RoutingUiState routing,
         AppDataLayout? layout = null,
         ChainProfileStore? profiles = null,
         PoolStore? pools = null,
@@ -74,6 +87,7 @@ public sealed class ChainControlForm : Form
         _getAliveResults = getAliveResults ?? throw new ArgumentNullException(nameof(getAliveResults));
         _gateway = gateway ?? throw new ArgumentNullException(nameof(gateway));
         _manager = manager ?? throw new ArgumentNullException(nameof(manager));
+        _routing = routing ?? throw new ArgumentNullException(nameof(routing));
 
         _layout = layout ?? new AppDataLayout();
         _layout.EnsureDirectories();
@@ -124,13 +138,48 @@ public sealed class ChainControlForm : Form
         RefreshStatus();
     }
 
+    /// <summary>
+    /// Compatibility overload until MainForm passes a shared <see cref="RoutingUiState"/>.
+    /// </summary>
+    public ChainControlForm(
+        AppSettings settings,
+        Func<IReadOnlyList<ProxyCheckResult>> getAliveResults,
+        ChainGatewayHost gateway,
+        ChainManager manager,
+        AppDataLayout? layout = null,
+        ChainProfileStore? profiles = null,
+        PoolStore? pools = null,
+        ProtectedCredentialStore? credentials = null,
+        string? settingsPath = null,
+        IReadOnlyList<ProxyCheckResult>? seedFixed = null,
+        IReadOnlyList<ProxyCheckResult>? seedPool = null)
+        : this(
+            settings,
+            getAliveResults,
+            gateway,
+            manager,
+            new RoutingUiState(),
+            layout,
+            profiles,
+            pools,
+            credentials,
+            settingsPath,
+            seedFixed,
+            seedPool)
+    {
+    }
+
     private void BuildUi()
     {
         StyleButton(_btnStart);
         StyleButton(_btnStop);
         StyleButton(_btnRestore);
         StyleButton(_btnExitIp);
+        StyleButton(_btnCopyHttp);
+        StyleButton(_btnCopySocks);
         _btnStart.Font = new Font(Font, FontStyle.Bold);
+        _btnCopyHttp.MinimumSize = new Size(72, 28);
+        _btnCopySocks.MinimumSize = new Size(72, 28);
 
         var root = new TableLayoutPanel
         {
@@ -157,9 +206,11 @@ public sealed class ChainControlForm : Form
         header.Controls.Add(_lblHttp, 0, header.RowCount++);
         header.Controls.Add(_lblSocks, 0, header.RowCount++);
         header.Controls.Add(_lblWinInet, 0, header.RowCount++);
+        header.Controls.Add(_lblRouting, 0, header.RowCount++);
         header.Controls.Add(_lblState, 0, header.RowCount++);
         header.Controls.Add(_lblHops, 0, header.RowCount++);
         header.Controls.Add(_lblHint, 0, header.RowCount++);
+        header.Controls.Add(_lblBanner, 0, header.RowCount++);
 
         var headerBtns = new FlowLayoutPanel
         {
@@ -172,6 +223,8 @@ public sealed class ChainControlForm : Form
         };
         headerBtns.Controls.Add(_btnStart);
         headerBtns.Controls.Add(_btnStop);
+        headerBtns.Controls.Add(_btnCopyHttp);
+        headerBtns.Controls.Add(_btnCopySocks);
         headerBtns.Controls.Add(_btnRestore);
         headerBtns.Controls.Add(_btnExitIp);
         header.Controls.Add(headerBtns, 0, header.RowCount++);
@@ -181,9 +234,9 @@ public sealed class ChainControlForm : Form
 
         var note = new Label
         {
-            Text = "TCP-only local gateway (HTTP + SOCKS5). Smart Pool uses elite proxies only. WinINET (optional) points at 127.0.0.1.",
+            Text = "Does not route every Windows app and does not route UDP.",
             AutoSize = true,
-            ForeColor = Color.FromArgb(90, 90, 90),
+            ForeColor = Color.FromArgb(120, 70, 20),
             Margin = new Padding(0, 8, 0, 0)
         };
 
@@ -257,11 +310,11 @@ public sealed class ChainControlForm : Form
 
         var side = BuildSidePanel();
         var importAlive = MakeSideButton("Import elite from session");
-        var paste = MakeSideButton("Paste elite");
+        var paste = MakeSideButton("Paste candidates");
         var remove = MakeSideButton("Remove");
         var save = MakeSideButton("Save pool");
         _btnStartFailover = MakeSideButton("Start Fast Failover");
-        _btnStartTwoHop = MakeSideButton("Start Privacy 2-hop");
+        _btnStartTwoHop = MakeSideButton("Auto 2-hop chain");
 
         importAlive.Click += (_, _) => ImportPoolFromSession();
         paste.Click += (_, _) => PastePool();
@@ -338,10 +391,107 @@ public sealed class ChainControlForm : Form
         _btnStop.Click += async (_, _) => await StopGatewayAsync();
         _btnRestore.Click += (_, _) => RestoreWindowsProxy();
         _btnExitIp.Click += async (_, _) => await CheckExitIpAsync();
+        _btnCopyHttp.Click += (_, _) => CopyGatewayEndpoint(_gateway.HttpPort, "HTTP");
+        _btnCopySocks.Click += (_, _) => CopyGatewayEndpoint(_gateway.SocksPort, "SOCKS");
         _tabs.SelectedIndexChanged += (_, _) => RefreshStatus();
         _fixedItems.ListChanged += (_, _) => RefreshStatus();
         _poolItems.ListChanged += (_, _) => RefreshStatus();
+        _routing.Changed += () =>
+        {
+            if (IsHandleCreated && !IsDisposed)
+            {
+                try { BeginInvoke(RefreshStatus); }
+                catch (ObjectDisposedException) { /* closing */ }
+            }
+        };
         Shown += (_, _) => RefreshStatus();
+        FormClosing += OnFormClosing;
+    }
+
+    private void OnFormClosing(object? sender, FormClosingEventArgs e)
+    {
+        if (!_gateway.IsRunning)
+            return;
+
+        var result = MessageBox.Show(this,
+            "The local gateway is still running.\n\n" +
+            "Yes — Keep running and close this window\n" +
+            "No — Stop the gateway and close\n" +
+            "Cancel — Stay on this window",
+            "Proxy Chains",
+            MessageBoxButtons.YesNoCancel,
+            MessageBoxIcon.Question);
+
+        if (result == DialogResult.Cancel)
+        {
+            e.Cancel = true;
+            return;
+        }
+
+        if (result == DialogResult.No)
+        {
+            try
+            {
+                _gateway.StopAsync().GetAwaiter().GetResult();
+                _routing.SetOff();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "Stop failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                e.Cancel = true;
+            }
+        }
+        // Yes = keep gateway running while closing the dialog.
+    }
+
+    private void CopyGatewayEndpoint(int port, string label)
+    {
+        var text = $"127.0.0.1:{port}";
+        try
+        {
+            Clipboard.SetText(text);
+            ShowBanner($"Copied {label} {text}", success: true);
+        }
+        catch (Exception ex)
+        {
+            ShowBanner($"Copy failed: {ex.Message}", success: false);
+        }
+    }
+
+    private void ShowBanner(string message, bool success)
+    {
+        _lblBanner.Text = message;
+        _lblBanner.ForeColor = success
+            ? Color.FromArgb(20, 110, 50)
+            : Color.FromArgb(160, 40, 40);
+        _lblBanner.Visible = true;
+    }
+
+    private void ClearBanner()
+    {
+        _lblBanner.Visible = false;
+        _lblBanner.Text = "";
+    }
+
+    private void SetBusy(bool busy)
+    {
+        _busy = busy;
+        UseWaitCursor = busy;
+        if (busy)
+        {
+            _btnStart.Enabled = false;
+            _btnStop.Enabled = false;
+            if (_btnStartStrict is not null)
+                _btnStartStrict.Enabled = false;
+            if (_btnStartFailover is not null)
+                _btnStartFailover.Enabled = false;
+            if (_btnStartTwoHop is not null)
+                _btnStartTwoHop.Enabled = false;
+        }
+        else
+        {
+            RefreshStatus();
+        }
     }
 
     private static Button MakeSideButton(string text)
@@ -380,10 +530,17 @@ public sealed class ChainControlForm : Form
         if (!running)
             mode = "Stopped";
 
+        var httpPort = running ? _gateway.HttpPort : _settings.ChainHttpPort;
+        var socksPort = running ? _gateway.SocksPort : _settings.ChainSocksPort;
+        var autoRouting = running && _gateway.SystemProxyActive;
+
         _lblMode.Text = $"Mode: {mode}";
-        _lblHttp.Text = $"HTTP gateway: 127.0.0.1:{_gateway.HttpPort}  (settings {_settings.ChainHttpPort})";
-        _lblSocks.Text = $"SOCKS gateway: 127.0.0.1:{_gateway.SocksPort}  (settings {_settings.ChainSocksPort})";
-        _lblWinInet.Text = $"WinINET system proxy: {(_gateway.SystemProxyActive ? "ACTIVE (local HTTP)" : "inactive")}";
+        _lblHttp.Text = $"HTTP gateway: 127.0.0.1:{httpPort}";
+        _lblSocks.Text = $"SOCKS gateway: 127.0.0.1:{socksPort}";
+        _lblWinInet.Text = autoRouting
+            ? $"Automatic Windows routing: ON — system proxy → 127.0.0.1:{httpPort} (HTTP apps)"
+            : "Automatic Windows routing: OFF — point apps at the ports above, or enable system proxy on Start";
+        _lblRouting.Text = _routing.Summary;
         _lblState.Text = running
             ? $"Chain state: {_manager.State}"
             : "Chain state: Stopped";
@@ -396,44 +553,51 @@ public sealed class ChainControlForm : Form
         var canStrict = _fixedItems.Count > 0;
         var canFailover = _poolItems.Count > 0;
         var canTwoHop = _poolItems.Count >= 2;
-        var canHeaderStart = PreferPoolTab() ? canFailover : canStrict || canFailover;
+        var canHeaderStart = PreferPoolTab() ? canFailover : canStrict;
 
-        _btnStart.Text = running ? "Apply / Switch" : "Start";
-        _btnStart.Enabled = canHeaderStart;
-        _btnStop.Enabled = running;
-        _btnExitIp.Enabled = running && hops.Count > 0;
-
-        if (_btnStartStrict is not null)
+        if (!_busy)
         {
-            _btnStartStrict.Text = running ? "Apply Strict" : "Start Strict";
-            _btnStartStrict.Enabled = canStrict;
-        }
+            _btnStart.Text = running
+                ? "Apply changes"
+                : PreferPoolTab()
+                    ? "Start fast failover"
+                    : "Start N-hop chain";
+            _btnStart.Enabled = canHeaderStart;
+            _btnStop.Enabled = running;
+            _btnExitIp.Enabled = running && hops.Count > 0;
 
-        if (_btnStartFailover is not null)
-        {
-            _btnStartFailover.Text = running ? "Apply Fast Failover" : "Start Fast Failover";
-            _btnStartFailover.Enabled = canFailover;
-        }
+            if (_btnStartStrict is not null)
+            {
+                _btnStartStrict.Text = running ? "Apply Strict" : "Start Strict";
+                _btnStartStrict.Enabled = canStrict;
+            }
 
-        if (_btnStartTwoHop is not null)
-            _btnStartTwoHop.Enabled = canTwoHop;
+            if (_btnStartFailover is not null)
+            {
+                _btnStartFailover.Text = running ? "Apply Fast Failover" : "Start Fast Failover";
+                _btnStartFailover.Enabled = canFailover;
+            }
+
+            if (_btnStartTwoHop is not null)
+                _btnStartTwoHop.Enabled = canTwoHop;
+        }
 
         if (!running && canHeaderStart)
         {
             _lblHint.Text = PreferPoolTab()
-                ? "Elite pool loaded — click Start to run Fast Failover."
-                : "Hops loaded — click Start to run the local gateway.";
+                ? "Pool loaded — Start runs Fast Failover using elite-alive candidates only."
+                : "Hops loaded — click Start to run the N-hop chain.";
             _lblHint.Visible = true;
         }
         else if (running)
         {
-            _lblHint.Text = "Gateway running. Closing this window leaves it active — use Stop to shut it down.";
+            _lblHint.Text = "Gateway running. Closing this window can keep it active — use Stop to shut it down.";
             _lblHint.Visible = true;
         }
         else
         {
             _lblHint.Text = PreferPoolTab()
-                ? "Smart Pool uses elite proxies only — import or paste elites, then Start."
+                ? "Smart Pool keeps all candidates; Start uses elite-alive ones. Paste adds unchecked entries."
                 : "Add hops on Fixed Chain, then click Start.";
             _lblHint.Visible = true;
         }
@@ -445,38 +609,31 @@ public sealed class ChainControlForm : Form
     {
         if (PreferPoolTab())
         {
-            if (_poolItems.Count > 0)
+            if (_poolItems.Count == 0)
             {
-                await StartFastFailoverAsync().ConfigureAwait(true);
+                MessageBox.Show(this,
+                    "Add at least one Smart Pool candidate, then click Start.",
+                    "Proxy Chains",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
                 return;
             }
 
-            if (_fixedItems.Count > 0)
-            {
-                await StartStrictAsync().ConfigureAwait(true);
-                return;
-            }
+            await StartFastFailoverAsync().ConfigureAwait(true);
+            return;
         }
-        else
+
+        if (_fixedItems.Count == 0)
         {
-            if (_fixedItems.Count > 0)
-            {
-                await StartStrictAsync().ConfigureAwait(true);
-                return;
-            }
-
-            if (_poolItems.Count > 0)
-            {
-                await StartFastFailoverAsync().ConfigureAwait(true);
-                return;
-            }
+            MessageBox.Show(this,
+                "Add at least one Fixed Chain hop, then click Start.",
+                "Proxy Chains",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
         }
 
-        MessageBox.Show(this,
-            "Add at least one Fixed Chain hop or Smart Pool candidate, then click Start.",
-            "Proxy Chains",
-            MessageBoxButtons.OK,
-            MessageBoxIcon.Warning);
+        await StartStrictAsync().ConfigureAwait(true);
     }
 
     private void TryLoadActiveProfile()
@@ -509,14 +666,8 @@ public sealed class ChainControlForm : Form
                     if (pool is not null)
                     {
                         _poolItems.Clear();
-                        var eliteByEndpoint = EliteAliveByEndpoint();
                         foreach (var c in pool)
-                        {
-                            var key = EndpointKey(c.Hop);
-                            if (eliteByEndpoint.TryGetValue(key, out var checkedElite))
-                                TryAddPool(ResultToCandidate(checkedElite));
-                            // Skip saved candidates that are not currently elite-alive.
-                        }
+                            TryAddPool(c);
                     }
                 }
 
@@ -641,14 +792,15 @@ public sealed class ChainControlForm : Form
         foreach (var p in parsed)
         {
             var hop = ProxyHop.FromParsed(p);
-            if (!eliteByEndpoint.TryGetValue(EndpointKey(hop), out var elite))
-            {
-                skipped++;
-                continue;
-            }
+            var key = EndpointKey(hop);
+            PoolCandidate candidate;
+            if (eliteByEndpoint.TryGetValue(key, out var elite))
+                candidate = ResultToCandidate(elite);
+            else
+                candidate = new PoolCandidate(hop);
 
             var before = _poolItems.Count;
-            TryAddPool(ResultToCandidate(elite));
+            TryAddPool(candidate);
             if (_poolItems.Count > before)
                 added++;
             else
@@ -659,19 +811,19 @@ public sealed class ChainControlForm : Form
         {
             MessageBox.Show(this,
                 skipped > 0
-                    ? "Clipboard proxies were skipped — Smart Pool only accepts elite alive proxies from the current session."
-                    : "No elite proxies found to add.",
+                    ? "No new proxies added (duplicates or empty paste)."
+                    : "No proxies found to add.",
                 "Proxy Chains",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
         }
         else if (skipped > 0)
         {
-            MessageBox.Show(this,
-                $"Added {added} elite proxy(s). Skipped {skipped} non-elite or unknown.",
-                "Proxy Chains",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
+            ShowBanner($"Added {added} candidate(s). Skipped {skipped} duplicate(s).", success: true);
+        }
+        else
+        {
+            ShowBanner($"Added {added} candidate(s) (unchecked if not in session).", success: true);
         }
     }
 
@@ -685,17 +837,42 @@ public sealed class ChainControlForm : Form
     {
         if (_poolItems.Any(c => SameEndpoint(c.Candidate.Hop, candidate.Hop)))
             return;
-        _poolItems.Add(new PoolItem(candidate));
+        _poolItems.Add(new PoolItem(candidate, ResolvePoolBadge));
     }
 
-    private void PrunePoolToEliteAlive()
+    private string ResolvePoolBadge(PoolCandidate candidate)
+    {
+        var key = EndpointKey(candidate.Hop);
+        foreach (var r in _getAliveResults())
+        {
+            if (!string.Equals(EndpointKey(ResultToHop(r)), key, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (r.Anonymity == AnonymityLevel.Elite)
+                return "[Elite]";
+            if (r.Anonymity == AnonymityLevel.Anonymous)
+                return "[Anon]";
+            return "[Alive]";
+        }
+
+        // Not in the current alive session set — prior check metadata means stale.
+        if (candidate.LastChecked is not null)
+            return "[Stale]";
+        return "[Unchecked]";
+    }
+
+    private List<PoolCandidate> EligibleEliteCandidates()
     {
         var elite = EliteAliveByEndpoint();
-        for (var i = _poolItems.Count - 1; i >= 0; i--)
+        var list = new List<PoolCandidate>();
+        foreach (var item in _poolItems)
         {
-            if (!elite.ContainsKey(EndpointKey(_poolItems[i].Candidate.Hop)))
-                _poolItems.RemoveAt(i);
+            var key = EndpointKey(item.Candidate.Hop);
+            if (elite.TryGetValue(key, out var checkedElite))
+                list.Add(ResultToCandidate(checkedElite));
         }
+
+        return list;
     }
 
     private static bool IsEliteAlive(ProxyCheckResult r) =>
@@ -853,11 +1030,12 @@ public sealed class ChainControlForm : Form
 
     private async Task StartFastFailoverAsync()
     {
-        PrunePoolToEliteAlive();
-        if (_poolItems.Count == 0)
+        var eligible = EligibleEliteCandidates();
+        if (eligible.Count == 0)
         {
             MessageBox.Show(this,
-                "Import elite alive proxies first.\n\nSmart Pool only uses elite proxies from the current session.",
+                "No elite-alive candidates in the pool for Fast Failover.\n\n" +
+                "Import elite proxies from the session, or wait until pasted candidates are checked as elite.",
                 "Proxy Chains",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
@@ -865,17 +1043,18 @@ public sealed class ChainControlForm : Form
         }
 
         var poolName = string.IsNullOrWhiteSpace(_poolName.Text) ? "default-pool" : _poolName.Text.Trim();
-        var candidates = _poolItems.Select(i => i.Candidate).ToList();
+        // Persist the full UI list; start only with eligible elite-alive entries.
+        var allCandidates = _poolItems.Select(i => i.Candidate).ToList();
         try
         {
-            _pools.Save(poolName, candidates);
+            _pools.Save(poolName, allCandidates);
         }
         catch
         {
             // continue
         }
 
-        var hops = candidates.Select(c => c.Hop).ToList();
+        var hops = eligible.Select(c => c.Hop).ToList();
         var profile = new ProxyChainProfile(
             Guid.NewGuid(),
             poolName + "-failover",
@@ -892,16 +1071,16 @@ public sealed class ChainControlForm : Form
             // continue
         }
 
-        await ApplyAndStartAsync(profile, candidates).ConfigureAwait(true);
+        await ApplyAndStartAsync(profile, eligible).ConfigureAwait(true);
     }
 
     private async Task StartPrivacyTwoHopAsync()
     {
-        PrunePoolToEliteAlive();
-        if (_poolItems.Count < 2)
+        var eligible = EligibleEliteCandidates();
+        if (eligible.Count < 2)
         {
             MessageBox.Show(this,
-                "Need at least two elite pool candidates for Privacy 2-hop.",
+                "Need at least two elite-alive pool candidates for Auto 2-hop chain.",
                 "Proxy Chains",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
@@ -911,18 +1090,18 @@ public sealed class ChainControlForm : Form
         using var cts = new CancellationTokenSource();
         using var progress = new PrivacyPairProgressDialog(cts);
         progress.Show(this);
-        Enabled = false;
+        SetBusy(true);
+        (PoolCandidate entry, PoolCandidate exit)? chosen = null;
         try
         {
             var dest = TestDestination();
-            var candidates = _poolItems.Select(i => i.Candidate).ToList();
             // Probe on a throwaway manager so pair search never rewires the live gateway.
             var edgeTester = new ChainManager(new ChainDialer(TimeSpan.FromSeconds(12)), _manager.Health)
             {
                 VerificationDestination = dest
             };
-            var chosen = await ChainSelectionPolicy.SelectAutoTwoHopPrivacyAsync(
-                candidates,
+            chosen = await ChainSelectionPolicy.SelectAutoTwoHopPrivacyAsync(
+                eligible,
                 async (entry, exit, ct) =>
                 {
                     var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -935,65 +1114,79 @@ public sealed class ChainControlForm : Form
                 timeBudget: TimeSpan.FromSeconds(45),
                 maxConcurrency: 4,
                 cancellationToken: cts.Token).ConfigureAwait(true);
-
-            if (cts.IsCancellationRequested)
-                return;
-
-            if (chosen is null)
-            {
-                MessageBox.Show(this, "No compatible entry→exit pair found.", "Privacy 2-hop",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            var (entry, exit) = chosen.Value;
-            var profile = new ProxyChainProfile(
-                Guid.NewGuid(),
-                "privacy-2hop",
-                ChainMode.StrictMultiHop,
-                [entry.Hop, exit.Hop],
-                string.IsNullOrWhiteSpace(_poolName.Text) ? null : _poolName.Text.Trim());
-
-            try
-            {
-                _profiles.Save(profile);
-            }
-            catch
-            {
-                // continue
-            }
-
-            _fixedItems.Clear();
-            _fixedItems.Add(new HopItem(entry.Hop));
-            _fixedItems.Add(new HopItem(exit.Hop));
-            _fixedName.Text = profile.Name;
-
-            await ApplyAndStartAsync(profile, candidates).ConfigureAwait(true);
         }
         catch (OperationCanceledException)
         {
-            // User cancelled or budget cancelled the token.
+            return;
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "Privacy 2-hop", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(this, ex.Message, "Auto 2-hop chain", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
         }
         finally
         {
-            Enabled = true;
-            RefreshStatus();
+            try { progress.Close(); } catch { /* ignore */ }
+            SetBusy(false);
         }
+
+        if (cts.IsCancellationRequested)
+            return;
+
+        if (chosen is null)
+        {
+            MessageBox.Show(this, "No compatible entry→exit pair found.", "Auto 2-hop chain",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        var (entry, exit) = chosen.Value;
+        var profile = new ProxyChainProfile(
+            Guid.NewGuid(),
+            "privacy-2hop",
+            ChainMode.StrictMultiHop,
+            [entry.Hop, exit.Hop],
+            string.IsNullOrWhiteSpace(_poolName.Text) ? null : _poolName.Text.Trim());
+
+        try
+        {
+            _profiles.Save(profile);
+        }
+        catch
+        {
+            // continue
+        }
+
+        _fixedItems.Clear();
+        _fixedItems.Add(new HopItem(entry.Hop));
+        _fixedItems.Add(new HopItem(exit.Hop));
+        _fixedName.Text = profile.Name;
+
+        await ApplyAndStartAsync(profile, eligible).ConfigureAwait(true);
     }
 
     private async Task ApplyAndStartAsync(ProxyChainProfile profile, IReadOnlyList<PoolCandidate>? pool)
     {
         PersistActiveProfileId(profile.Id);
 
+        var modeLabel = profile.Mode switch
+        {
+            ChainMode.StrictMultiHop => "Strict multi-hop",
+            ChainMode.FastFailover => "Fast failover",
+            _ => profile.Mode.ToString()
+        };
+
+        _routing.SetStarting(profile.Name, modeLabel);
+        RefreshStatus();
+        ClearBanner();
+        ShowBanner("Starting gateway…", success: true);
+
         _manager.VerificationDestination = TestDestination();
 
         _gateway.HttpPort = _settings.ChainHttpPort;
         _gateway.SocksPort = _settings.ChainSocksPort;
 
+        SetBusy(true);
         try
         {
             if (_gateway.IsRunning)
@@ -1006,23 +1199,111 @@ public sealed class ChainControlForm : Form
                 await _gateway.StartAsync(_manager, _settings.ChainEnableSystemProxy).ConfigureAwait(true);
             }
 
+            _routing.SetTunnelUp(
+                profile.Name,
+                modeLabel,
+                _gateway.SystemProxyActive,
+                _gateway.HttpPort,
+                _gateway.SocksPort);
             RefreshStatus();
-            MessageBox.Show(this,
-                $"Gateway running.\nHTTP 127.0.0.1:{_gateway.HttpPort}\nSOCKS 127.0.0.1:{_gateway.SocksPort}" +
-                (_gateway.SystemProxyActive ? "\nWinINET → local HTTP gateway." : ""),
-                "Proxy Chains",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
+            ShowBanner(
+                $"Gateway up — HTTP 127.0.0.1:{_gateway.HttpPort}, SOCKS 127.0.0.1:{_gateway.SocksPort}. Verifying exit…",
+                success: true);
+
+            await VerifyExitAfterStartAsync(profile.Name, modeLabel).ConfigureAwait(true);
         }
         catch (PortInUseException ex)
         {
+            _routing.SetOff();
             await HandlePortInUseAsync(ex, profile, pool).ConfigureAwait(true);
         }
         catch (Exception ex)
         {
+            _routing.SetOff();
             MessageBox.Show(this, ex.Message, "Start failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            ShowBanner($"Start failed: {ex.Message}", success: false);
             RefreshStatus();
         }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    private async Task VerifyExitAfterStartAsync(string? profileName, string? modeLabel)
+    {
+        string? directIp = null;
+        string? exitIp = null;
+        var auto = _gateway.SystemProxyActive;
+        var http = _gateway.HttpPort;
+        var socks = _gateway.SocksPort;
+
+        try
+        {
+            directIp = await ExitIpChecker.CheckDirectAsync(
+                _settings.ExitIpCheckUrl,
+                CancellationToken.None).ConfigureAwait(true);
+
+            ValueTask<Stream> ConnectCallback(SocketsHttpConnectionContext ctx, CancellationToken ct)
+            {
+                var dest = new ChainDestination(ctx.DnsEndPoint.Host, ctx.DnsEndPoint.Port);
+                return new ValueTask<Stream>(_manager.ConnectAsync(dest, ct));
+            }
+
+            exitIp = await ExitIpChecker.CheckAsync(
+                ConnectCallback,
+                _settings.ExitIpCheckUrl,
+                CancellationToken.None).ConfigureAwait(true);
+
+            if (!string.IsNullOrWhiteSpace(directIp)
+                && !string.IsNullOrWhiteSpace(exitIp)
+                && !string.Equals(directIp, exitIp, StringComparison.OrdinalIgnoreCase))
+            {
+                _routing.SetVerified(exitIp, directIp, profileName, modeLabel, auto, http, socks);
+                ShowBanner($"Verified — exit {exitIp} (direct {directIp}).", success: true);
+            }
+            else if (string.Equals(directIp, exitIp, StringComparison.OrdinalIgnoreCase))
+            {
+                _routing.SetNotVerified(
+                    $"exit IP matches direct IP ({exitIp})",
+                    exitIp,
+                    directIp,
+                    profileName,
+                    modeLabel,
+                    auto,
+                    http,
+                    socks);
+                ShowBanner($"NOT VERIFIED — exit IP matches direct ({exitIp}).", success: false);
+            }
+            else
+            {
+                _routing.SetNotVerified(
+                    "could not compare exit and direct IPs",
+                    exitIp,
+                    directIp,
+                    profileName,
+                    modeLabel,
+                    auto,
+                    http,
+                    socks);
+                ShowBanner("NOT VERIFIED — could not compare exit and direct IPs.", success: false);
+            }
+        }
+        catch (Exception ex)
+        {
+            _routing.SetNotVerified(
+                ex.Message,
+                exitIp,
+                directIp,
+                profileName,
+                modeLabel,
+                auto,
+                http,
+                socks);
+            ShowBanner($"NOT VERIFIED — {ex.Message}", success: false);
+        }
+
+        RefreshStatus();
     }
 
     private async Task HandlePortInUseAsync(
@@ -1064,19 +1345,22 @@ public sealed class ChainControlForm : Form
 
     private async Task StopGatewayAsync()
     {
-        UseWaitCursor = true;
+        SetBusy(true);
         try
         {
             await _gateway.StopAsync().ConfigureAwait(true);
+            _routing.SetOff();
+            ShowBanner("Gateway stopped.", success: true);
             RefreshStatus();
         }
         catch (Exception ex)
         {
             MessageBox.Show(this, ex.Message, "Stop failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            ShowBanner($"Stop failed: {ex.Message}", success: false);
         }
         finally
         {
-            UseWaitCursor = false;
+            SetBusy(false);
         }
     }
 
@@ -1095,17 +1379,16 @@ public sealed class ChainControlForm : Form
             {
                 // Stopping the gateway restores WinINET when we enabled it.
                 _gateway.StopAsync().GetAwaiter().GetResult();
+                _routing.SetOff();
                 RefreshStatus();
-                MessageBox.Show(this, "Gateway stopped and Windows proxy restored.", "Proxy Chains",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                ShowBanner("Gateway stopped and Windows proxy restored.", success: true);
                 return;
             }
 
             if (_winProxy.HasPendingRestore)
             {
                 _winProxy.Restore();
-                MessageBox.Show(this, "Original Windows proxy settings restored.", "Proxy Chains",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                ShowBanner("Original Windows proxy settings restored.", success: true);
             }
             else
             {
@@ -1134,7 +1417,7 @@ public sealed class ChainControlForm : Form
             return;
         }
 
-        UseWaitCursor = true;
+        SetBusy(true);
         try
         {
             ValueTask<Stream> ConnectCallback(SocketsHttpConnectionContext ctx, CancellationToken ct)
@@ -1148,18 +1431,17 @@ public sealed class ChainControlForm : Form
                 _settings.ExitIpCheckUrl,
                 CancellationToken.None).ConfigureAwait(true);
 
-            MessageBox.Show(this, $"Exit IP: {ip}", "Exit IP",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            ShowBanner($"Exit IP: {ip}", success: true);
         }
         catch (Exception ex)
         {
             MessageBox.Show(this, ex.Message, "Exit IP check failed",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
+            ShowBanner($"Exit IP check failed: {ex.Message}", success: false);
         }
         finally
         {
-            UseWaitCursor = false;
-            RefreshStatus();
+            SetBusy(false);
         }
     }
 
@@ -1239,15 +1521,16 @@ public sealed class ChainControlForm : Form
         public override string ToString() => $"{Hop.Kind}  {Hop.Endpoint}";
     }
 
-    private sealed class PoolItem(PoolCandidate candidate)
+    private sealed class PoolItem(PoolCandidate candidate, Func<PoolCandidate, string> badgeResolver)
     {
         public PoolCandidate Candidate { get; } = candidate;
         public override string ToString()
         {
             var c = Candidate;
+            var badge = badgeResolver(c);
             var meta = c.Country is { Length: > 0 } ? $"  [{c.Country}]" : "";
             var lat = c.LatencyMs is int ms ? $"  {ms}ms" : "";
-            return $"{c.Hop.Kind}  {c.Hop.Endpoint}{meta}{lat}";
+            return $"{badge}  {c.Hop.Kind}  {c.Hop.Endpoint}{meta}{lat}";
         }
     }
 
@@ -1255,7 +1538,7 @@ public sealed class ChainControlForm : Form
     {
         public PrivacyPairProgressDialog(CancellationTokenSource cts)
         {
-            Text = "Privacy 2-hop";
+            Text = "Auto 2-hop chain";
             StartPosition = FormStartPosition.CenterParent;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;

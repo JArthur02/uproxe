@@ -19,7 +19,7 @@ public sealed class SettingsForm : Form
     private readonly TextBox _exitIpUrl = new();
     private readonly CheckBox _chainSystemProxy = new()
     {
-        Text = "Enable Windows system proxy when gateway starts (local HTTP gateway)",
+        Text = "Enable automatic Windows routing when gateway starts (apps that use Windows proxy settings)",
         AutoSize = true
     };
     private readonly CheckBox _autoCheck = new() { Text = "Auto-check after scrape", AutoSize = true };
