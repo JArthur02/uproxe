@@ -13,15 +13,24 @@ public sealed class SecretScanForm : Form
     private readonly AppSettings _settings;
     private readonly Func<string?> _loadedProxiesText;
 
-    private readonly TextBox _target = new() { Width = 360, Anchor = AnchorStyles.Left | AnchorStyles.Right };
-    private readonly Button _browseFile = new() { Text = "File…", Width = 70 };
-    private readonly Button _browseFolder = new() { Text = "Folder…", Width = 80 };
-    private readonly Button _scanTarget = new() { Text = "Scan target", Width = 100 };
+    private readonly TextBox _target = new() { MinimumSize = new Size(200, 0) };
+    private readonly Button _browseFile = new() { Text = "File…", AutoSize = true };
+    private readonly Button _browseFolder = new() { Text = "Folder…", AutoSize = true };
+    private readonly Button _scanTarget = new() { Text = "Scan target", AutoSize = true };
     private readonly Button _scanProxies = new() { Text = "Scan loaded proxies", AutoSize = true };
-    private readonly CheckBox _verify = new() { Text = "Verify findings (sends candidates to provider APIs)", AutoSize = true };
+    private readonly CheckBox _verify = new()
+    {
+        Text = "Verify findings (sends candidates to provider APIs)",
+        AutoSize = true
+    };
     private readonly DataGridView _grid = new();
     private readonly BindingList<FindingRow> _rows = [];
-    private readonly Label _status = new() { AutoSize = true, ForeColor = Color.FromArgb(70, 70, 70) };
+    private readonly Label _status = new()
+    {
+        AutoSize = true,
+        ForeColor = Color.FromArgb(70, 70, 70),
+        Dock = DockStyle.Fill
+    };
 
     private CancellationTokenSource? _cts;
 
@@ -32,19 +41,65 @@ public sealed class SecretScanForm : Form
 
         Text = "Secret Scanner — TruffleHog";
         StartPosition = FormStartPosition.CenterParent;
+        AutoScaleMode = AutoScaleMode.Dpi;
+        AutoScaleDimensions = new SizeF(96F, 96F);
         MinimumSize = new Size(720, 420);
-        ClientSize = new Size(820, 480);
+        ClientSize = new Size(860, 520);
         Font = new Font("Segoe UI", 9f);
         BackColor = Color.White;
 
         _verify.Checked = _settings.SecretScanVerify;
 
-        var top = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, Padding = new Padding(8, 8, 8, 0), WrapContents = false };
-        top.Controls.AddRange([new Label { Text = "Target:", AutoSize = true, Margin = new Padding(0, 6, 4, 0) },
-            _target, _browseFile, _browseFolder, _scanTarget]);
+        foreach (var btn in new[] { _browseFile, _browseFolder, _scanTarget, _scanProxies })
+        {
+            btn.Padding = new Padding(10, 4, 10, 4);
+            btn.Margin = new Padding(2);
+        }
 
-        var second = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 36, Padding = new Padding(8, 4, 8, 4), WrapContents = false };
-        second.Controls.AddRange([_scanProxies, _verify]);
+        var top = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 5,
+            Padding = new Padding(8, 10, 8, 4)
+        };
+        top.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        top.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        top.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        top.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        top.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        top.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var targetLabel = new Label
+        {
+            Text = "Target:",
+            AutoSize = true,
+            Anchor = AnchorStyles.Left,
+            Margin = new Padding(0, 8, 6, 0)
+        };
+        _target.Dock = DockStyle.Fill;
+        _target.Margin = new Padding(0, 4, 4, 4);
+
+        top.Controls.Add(targetLabel, 0, 0);
+        top.Controls.Add(_target, 1, 0);
+        top.Controls.Add(_browseFile, 2, 0);
+        top.Controls.Add(_browseFolder, 3, 0);
+        top.Controls.Add(_scanTarget, 4, 0);
+
+        var second = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = true,
+            Padding = new Padding(8, 4, 8, 8),
+            FlowDirection = FlowDirection.LeftToRight
+        };
+        _scanProxies.Margin = new Padding(0, 2, 12, 2);
+        _verify.Margin = new Padding(0, 6, 0, 2);
+        second.Controls.Add(_scanProxies);
+        second.Controls.Add(_verify);
 
         _grid.Dock = DockStyle.Fill;
         _grid.AllowUserToAddRows = false;
@@ -58,13 +113,14 @@ public sealed class SecretScanForm : Form
         _grid.BorderStyle = BorderStyle.None;
         _grid.EnableHeadersVisualStyles = false;
         _grid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(245, 246, 248);
+        _grid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
         _grid.Columns.AddRange(
         [
-            Col(nameof(FindingRow.Detector), "Detector", 90),
-            Col(nameof(FindingRow.Verified), "Verified", 60),
-            Col(nameof(FindingRow.Secret), "Secret (redacted)", 140),
-            Col(nameof(FindingRow.Location), "Location", 200),
-            Col(nameof(FindingRow.Line), "Line", 50)
+            Col(nameof(FindingRow.Detector), "Detector", 90, 70),
+            Col(nameof(FindingRow.Verified), "Verified", 60, 56),
+            Col(nameof(FindingRow.Secret), "Secret (redacted)", 140, 100),
+            Col(nameof(FindingRow.Location), "Location", 200, 100),
+            Col(nameof(FindingRow.Line), "Line", 50, 44)
         ]);
         _grid.DataSource = _rows;
         _grid.CellFormatting += (_, e) =>
@@ -73,9 +129,15 @@ public sealed class SecretScanForm : Form
                 e.CellStyle.BackColor = Color.FromArgb(253, 236, 234);
         };
 
-        var statusBar = new Panel { Dock = DockStyle.Bottom, Height = 30, Padding = new Padding(8, 6, 8, 0) };
+        var statusBar = new Panel
+        {
+            Dock = DockStyle.Bottom,
+            AutoSize = true,
+            Padding = new Padding(10, 8, 10, 8)
+        };
         statusBar.Controls.Add(_status);
 
+        // Fill first, then bottom/top docks (reverse z-order of DockStyle.Fill siblings).
         Controls.Add(_grid);
         Controls.Add(statusBar);
         Controls.Add(second);
@@ -202,12 +264,12 @@ public sealed class SecretScanForm : Form
 
     private void SetStatus(string text) => _status.Text = text;
 
-    private static DataGridViewTextBoxColumn Col(string prop, string header, int weight) => new()
+    private static DataGridViewTextBoxColumn Col(string prop, string header, int weight, int minWidth) => new()
     {
         DataPropertyName = prop,
         HeaderText = header,
         FillWeight = weight,
-        MinimumWidth = 50
+        MinimumWidth = minWidth
     };
 
     private sealed class FindingRow
