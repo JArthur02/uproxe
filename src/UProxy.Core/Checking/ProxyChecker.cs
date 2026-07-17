@@ -132,7 +132,10 @@ public sealed class ProxyChecker
 
             await socket.ConnectAsync(new IPEndPoint(proxyIp, proxy.Port), cts.Token).ConfigureAwait(false);
             sw.Stop();
-            return (true, (int)sw.ElapsedMilliseconds, FailureReason.None, null);
+            var ms = (int)Math.Round(sw.Elapsed.TotalMilliseconds);
+            if (ms == 0 && sw.ElapsedTicks > 0)
+                ms = 1;
+            return (true, ms, FailureReason.None, null);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -191,8 +194,10 @@ public sealed class ProxyChecker
         var socks5 = await SocksClient.ConnectAndHttpGetAsync(
             proxy, ProxyProtocol.Socks5, socksDest, destPort, path, _settings.TimeoutMs, ct, socksOpts).ConfigureAwait(false);
 
-        // Connect latency = the faster successful (or attempted) TCP connect to the proxy.
-        var connectMs = Math.Min(socks4.ConnectMs, socks5.ConnectMs);
+        // Connect latency must come from attempts that actually completed TCP connect.
+        // Math.Min(socks4, socks5) was wrong: a failed SOCKS4/5 attempt that never connected
+        // (ConnectMs still 0) zeroed out the successful attempt's real RTT in the UI.
+        var connectMs = PickSocksConnectMs(socks4, socks5);
 
         if (!socks4.Ok && !socks5.Ok)
         {
@@ -249,6 +254,24 @@ public sealed class ProxyChecker
             UsedRemoteDns = _settings.ResolveHostnamesThroughProxy,
             FakeIp = fakeIp
         };
+    }
+
+    /// <summary>
+    /// Prefer connect RTTs from successful SOCKS attempts; otherwise any attempt that finished TCP connect.
+    /// </summary>
+    internal static int PickSocksConnectMs(
+        (bool Ok, FailureReason Failure, string? Error, int LatencyMs, int ConnectMs, ProxyAuthMethod Auth) socks4,
+        (bool Ok, FailureReason Failure, string? Error, int LatencyMs, int ConnectMs, ProxyAuthMethod Auth) socks5)
+    {
+        if (socks4.Ok && socks5.Ok)
+            return Math.Min(socks4.ConnectMs, socks5.ConnectMs);
+        if (socks4.Ok)
+            return socks4.ConnectMs;
+        if (socks5.Ok)
+            return socks5.ConnectMs;
+        if (socks4.ConnectMs > 0 && socks5.ConnectMs > 0)
+            return Math.Min(socks4.ConnectMs, socks5.ConnectMs);
+        return Math.Max(socks4.ConnectMs, socks5.ConnectMs);
     }
 
     private static (FailureReason Failure, string? Error) PickSocksFailure(

@@ -57,7 +57,9 @@ public static class SocksClient
             var connectSw = System.Diagnostics.Stopwatch.StartNew();
             await socket.ConnectAsync(new IPEndPoint(proxyIp, proxy.Port), cts.Token).ConfigureAwait(false);
             connectSw.Stop();
-            connectMs = (int)connectSw.ElapsedMilliseconds;
+            // Round sub-millisecond connects up to 1 so the UI doesn't look like "never connected".
+            var ms = (int)Math.Round(connectSw.Elapsed.TotalMilliseconds);
+            connectMs = ms > 0 ? ms : (connectSw.ElapsedTicks > 0 ? 1 : 0);
 
             var dest = ResolveDestination(destinationHost, options);
 
