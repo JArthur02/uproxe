@@ -33,14 +33,26 @@ public sealed class ChainControlForm : Form
     private readonly Label _lblWinInet = new() { AutoSize = true };
     private readonly Label _lblState = new() { AutoSize = true };
     private readonly Label _lblHops = new() { AutoSize = true, MaximumSize = new Size(680, 0) };
+    private readonly Label _lblHint = new()
+    {
+        AutoSize = true,
+        ForeColor = Color.FromArgb(120, 70, 20),
+        MaximumSize = new Size(720, 0)
+    };
+    private readonly Button _btnStart = new() { Text = "Start", AutoSize = true };
     private readonly Button _btnStop = new() { Text = "Stop", AutoSize = true };
     private readonly Button _btnRestore = new() { Text = "Restore Windows Proxy", AutoSize = true };
     private readonly Button _btnExitIp = new() { Text = "Check Exit IP", AutoSize = true };
 
+    private readonly TabControl _tabs = new() { Dock = DockStyle.Fill };
     private readonly ListBox _fixedHops = new() { IntegralHeight = false, Dock = DockStyle.Fill };
     private readonly TextBox _fixedName = new() { Dock = DockStyle.Fill };
     private readonly ListBox _poolCandidates = new() { IntegralHeight = false, Dock = DockStyle.Fill };
     private readonly TextBox _poolName = new() { Dock = DockStyle.Fill, Text = "default-pool" };
+
+    private Button? _btnStartStrict;
+    private Button? _btnStartFailover;
+    private Button? _btnStartTwoHop;
 
     private readonly BindingList<HopItem> _fixedItems = [];
     private readonly BindingList<PoolItem> _poolItems = [];
@@ -90,27 +102,35 @@ public sealed class ChainControlForm : Form
         BuildUi();
         WireEvents();
 
-        if (seedFixed is { Count: > 0 })
+        var seededFixed = seedFixed is { Count: > 0 };
+        var seededPool = seedPool is { Count: > 0 };
+
+        if (seededFixed)
         {
-            foreach (var r in seedFixed)
+            foreach (var r in seedFixed!)
                 TryAddFixed(ResultToHop(r));
         }
 
-        if (seedPool is { Count: > 0 })
+        if (seededPool)
         {
-            foreach (var r in seedPool)
+            foreach (var r in seedPool!)
                 TryAddPool(ResultToCandidate(r));
         }
 
-        TryLoadActiveProfile();
+        // Do not wipe context-menu seeds with the last saved profile.
+        if (!seededFixed && !seededPool)
+            TryLoadActiveProfile();
+
         RefreshStatus();
     }
 
     private void BuildUi()
     {
+        StyleButton(_btnStart);
         StyleButton(_btnStop);
         StyleButton(_btnRestore);
         StyleButton(_btnExitIp);
+        _btnStart.Font = new Font(Font, FontStyle.Bold);
 
         var root = new TableLayoutPanel
         {
@@ -139,6 +159,7 @@ public sealed class ChainControlForm : Form
         header.Controls.Add(_lblWinInet, 0, header.RowCount++);
         header.Controls.Add(_lblState, 0, header.RowCount++);
         header.Controls.Add(_lblHops, 0, header.RowCount++);
+        header.Controls.Add(_lblHint, 0, header.RowCount++);
 
         var headerBtns = new FlowLayoutPanel
         {
@@ -149,25 +170,25 @@ public sealed class ChainControlForm : Form
             Margin = new Padding(0, 6, 0, 0),
             Padding = new Padding(0)
         };
+        headerBtns.Controls.Add(_btnStart);
         headerBtns.Controls.Add(_btnStop);
         headerBtns.Controls.Add(_btnRestore);
         headerBtns.Controls.Add(_btnExitIp);
         header.Controls.Add(headerBtns, 0, header.RowCount++);
 
-        var tabs = new TabControl { Dock = DockStyle.Fill };
-        tabs.TabPages.Add(BuildFixedTab());
-        tabs.TabPages.Add(BuildPoolTab());
+        _tabs.TabPages.Add(BuildFixedTab());
+        _tabs.TabPages.Add(BuildPoolTab());
 
         var note = new Label
         {
-            Text = "TCP-only local gateway (HTTP + SOCKS5). Windows system proxy points at 127.0.0.1 HTTP only.",
+            Text = "TCP-only local gateway (HTTP + SOCKS5). Click Start after loading hops — WinINET (optional) points at 127.0.0.1 only.",
             AutoSize = true,
             ForeColor = Color.FromArgb(90, 90, 90),
             Margin = new Padding(0, 8, 0, 0)
         };
 
         root.Controls.Add(header, 0, 0);
-        root.Controls.Add(tabs, 0, 1);
+        root.Controls.Add(_tabs, 0, 1);
         root.Controls.Add(note, 0, 2);
         Controls.Add(root);
     }
@@ -205,7 +226,7 @@ public sealed class ChainControlForm : Form
         var down = MakeSideButton("Down");
         var save = MakeSideButton("Save");
         var test = MakeSideButton("Test chain");
-        var start = MakeSideButton("Start Strict");
+        _btnStartStrict = MakeSideButton("Start Strict");
 
         addSession.Click += (_, _) => AddFixedFromSession();
         paste.Click += (_, _) => PasteFixedOrdered();
@@ -214,9 +235,9 @@ public sealed class ChainControlForm : Form
         down.Click += (_, _) => MoveFixed(1);
         save.Click += (_, _) => SaveFixedProfile();
         test.Click += async (_, _) => await TestFixedAsync();
-        start.Click += async (_, _) => await StartStrictAsync();
+        _btnStartStrict.Click += async (_, _) => await StartStrictAsync();
 
-        side.Controls.AddRange([addSession, paste, remove, up, down, save, test, start]);
+        side.Controls.AddRange([addSession, paste, remove, up, down, save, test, _btnStartStrict]);
 
         var nameRow = new TableLayoutPanel
         {
@@ -268,17 +289,17 @@ public sealed class ChainControlForm : Form
         var paste = MakeSideButton("Paste");
         var remove = MakeSideButton("Remove");
         var save = MakeSideButton("Save pool");
-        var startFail = MakeSideButton("Start Fast Failover");
-        var startTwo = MakeSideButton("Start Privacy 2-hop");
+        _btnStartFailover = MakeSideButton("Start Fast Failover");
+        _btnStartTwoHop = MakeSideButton("Start Privacy 2-hop");
 
         importAlive.Click += (_, _) => ImportPoolFromSession();
         paste.Click += (_, _) => PastePool();
         remove.Click += (_, _) => RemoveSelectedPool();
         save.Click += (_, _) => SavePool();
-        startFail.Click += async (_, _) => await StartFastFailoverAsync();
-        startTwo.Click += async (_, _) => await StartPrivacyTwoHopAsync();
+        _btnStartFailover.Click += async (_, _) => await StartFastFailoverAsync();
+        _btnStartTwoHop.Click += async (_, _) => await StartPrivacyTwoHopAsync();
 
-        side.Controls.AddRange([importAlive, paste, remove, save, startFail, startTwo]);
+        side.Controls.AddRange([importAlive, paste, remove, save, _btnStartFailover, _btnStartTwoHop]);
 
         var nameRow = new TableLayoutPanel
         {
@@ -303,9 +324,13 @@ public sealed class ChainControlForm : Form
 
     private void WireEvents()
     {
+        _btnStart.Click += async (_, _) => await StartFromHeaderAsync();
         _btnStop.Click += async (_, _) => await StopGatewayAsync();
         _btnRestore.Click += (_, _) => RestoreWindowsProxy();
         _btnExitIp.Click += async (_, _) => await CheckExitIpAsync();
+        _tabs.SelectedIndexChanged += (_, _) => RefreshStatus();
+        _fixedItems.ListChanged += (_, _) => RefreshStatus();
+        _poolItems.ListChanged += (_, _) => RefreshStatus();
         Shown += (_, _) => RefreshStatus();
     }
 
@@ -333,7 +358,7 @@ public sealed class ChainControlForm : Form
     private void RefreshStatus()
     {
         var running = _gateway.IsRunning;
-        var profile = _manager.ActiveProfile;
+        var profile = running ? _manager.ActiveProfile : null;
         var mode = profile?.Mode switch
         {
             ChainMode.StrictMultiHop => "Strict multi-hop",
@@ -347,15 +372,97 @@ public sealed class ChainControlForm : Form
         _lblHttp.Text = $"HTTP gateway: 127.0.0.1:{_gateway.HttpPort}  (settings {_settings.ChainHttpPort})";
         _lblSocks.Text = $"SOCKS gateway: 127.0.0.1:{_gateway.SocksPort}  (settings {_settings.ChainSocksPort})";
         _lblWinInet.Text = $"WinINET system proxy: {(_gateway.SystemProxyActive ? "ACTIVE (local HTTP)" : "inactive")}";
-        _lblState.Text = $"Chain state: {_manager.State}";
+        _lblState.Text = running
+            ? $"Chain state: {_manager.State}"
+            : "Chain state: Stopped";
 
-        var hops = _manager.GetActiveHops();
+        var hops = running ? _manager.GetActiveHops() : Array.Empty<ProxyHop>();
         _lblHops.Text = hops.Count == 0
             ? "Active hops: (none)"
             : "Active hops: " + string.Join(" → ", hops.Select(h => $"{h.Kind} {h.Endpoint}"));
 
+        var canStrict = _fixedItems.Count > 0;
+        var canFailover = _poolItems.Count > 0;
+        var canTwoHop = _poolItems.Count >= 2;
+        var canHeaderStart = PreferPoolTab() ? canFailover : canStrict || canFailover;
+
+        _btnStart.Text = running ? "Apply / Switch" : "Start";
+        _btnStart.Enabled = canHeaderStart;
         _btnStop.Enabled = running;
         _btnExitIp.Enabled = running && hops.Count > 0;
+
+        if (_btnStartStrict is not null)
+        {
+            _btnStartStrict.Text = running ? "Apply Strict" : "Start Strict";
+            _btnStartStrict.Enabled = canStrict;
+        }
+
+        if (_btnStartFailover is not null)
+        {
+            _btnStartFailover.Text = running ? "Apply Fast Failover" : "Start Fast Failover";
+            _btnStartFailover.Enabled = canFailover;
+        }
+
+        if (_btnStartTwoHop is not null)
+            _btnStartTwoHop.Enabled = canTwoHop;
+
+        if (!running && canHeaderStart)
+        {
+            _lblHint.Text = PreferPoolTab()
+                ? "Hops/pool loaded — click Start to run Fast Failover (or use Start Strict on the Fixed tab)."
+                : "Hops loaded — click Start to run the local gateway.";
+            _lblHint.Visible = true;
+        }
+        else if (running)
+        {
+            _lblHint.Text = "Gateway running. Closing this window leaves it active — use Stop to shut it down.";
+            _lblHint.Visible = true;
+        }
+        else
+        {
+            _lblHint.Text = "Add hops (Fixed Chain) or pool candidates (Smart Pool), then click Start.";
+            _lblHint.Visible = true;
+        }
+    }
+
+    private bool PreferPoolTab() => _tabs.SelectedIndex == 1;
+
+    private async Task StartFromHeaderAsync()
+    {
+        if (PreferPoolTab())
+        {
+            if (_poolItems.Count > 0)
+            {
+                await StartFastFailoverAsync().ConfigureAwait(true);
+                return;
+            }
+
+            if (_fixedItems.Count > 0)
+            {
+                await StartStrictAsync().ConfigureAwait(true);
+                return;
+            }
+        }
+        else
+        {
+            if (_fixedItems.Count > 0)
+            {
+                await StartStrictAsync().ConfigureAwait(true);
+                return;
+            }
+
+            if (_poolItems.Count > 0)
+            {
+                await StartFastFailoverAsync().ConfigureAwait(true);
+                return;
+            }
+        }
+
+        MessageBox.Show(this,
+            "Add at least one Fixed Chain hop or Smart Pool candidate, then click Start.",
+            "Proxy Chains",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Warning);
     }
 
     private void TryLoadActiveProfile()
@@ -464,6 +571,16 @@ public sealed class ChainControlForm : Form
     {
         if (_fixedItems.Any(h => SameEndpoint(h.Hop, hop)))
             return;
+        if (_fixedItems.Count >= ChainDialer.MaxHops)
+        {
+            MessageBox.Show(this,
+                $"Fixed chains support at most {ChainDialer.MaxHops} hops.",
+                "Proxy Chains",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
         _fixedItems.Add(new HopItem(hop));
     }
 
@@ -477,7 +594,10 @@ public sealed class ChainControlForm : Form
             return;
         }
 
-        foreach (var r in alive)
+        using var dlg = new PickProxiesDialog(alive, "Add to Smart Pool");
+        if (dlg.ShowDialog(this) != DialogResult.OK)
+            return;
+        foreach (var r in dlg.Selected)
             TryAddPool(ResultToCandidate(r));
     }
 
@@ -571,15 +691,29 @@ public sealed class ChainControlForm : Form
             return;
         }
 
+        if (_fixedItems.Count > ChainDialer.MaxHops)
+        {
+            MessageBox.Show(this,
+                $"Fixed chains support at most {ChainDialer.MaxHops} hops.",
+                "Proxy Chains",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
+        // Use a temporary manager so Test never mutates the live gateway chain.
         var profile = BuildFixedProfile(_fixedName.Text.Trim().Length > 0 ? _fixedName.Text.Trim() : "test");
-        _manager.SwitchProfile(profile);
-        RefreshStatus();
+        var tester = new ChainManager(new ChainDialer(TimeSpan.FromSeconds(20)), new ChainHealthTracker())
+        {
+            VerificationDestination = TestDestination()
+        };
+        tester.SwitchProfile(profile);
 
         UseWaitCursor = true;
         try
         {
             var dest = TestDestination();
-            var ok = await _manager.ValidateChainAsync(dest, CancellationToken.None).ConfigureAwait(true);
+            var ok = await tester.ValidateChainAsync(dest, CancellationToken.None).ConfigureAwait(true);
             MessageBox.Show(this,
                 ok ? $"Chain OK → {dest}" : $"Chain failed → {dest}",
                 "Test chain",
@@ -603,6 +737,16 @@ public sealed class ChainControlForm : Form
         {
             MessageBox.Show(this, "Add at least one hop.", "Proxy Chains",
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        if (_fixedItems.Count > ChainDialer.MaxHops)
+        {
+            MessageBox.Show(this,
+                $"Fixed chains support at most {ChainDialer.MaxHops} hops.",
+                "Proxy Chains",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
             return;
         }
 
@@ -677,12 +821,17 @@ public sealed class ChainControlForm : Form
         {
             var dest = TestDestination();
             var candidates = _poolItems.Select(i => i.Candidate).ToList();
+            // Probe on a throwaway manager so pair search never rewires the live gateway.
+            var edgeTester = new ChainManager(new ChainDialer(TimeSpan.FromSeconds(12)), _manager.Health)
+            {
+                VerificationDestination = dest
+            };
             var chosen = await ChainSelectionPolicy.SelectAutoTwoHopPrivacyAsync(
                 candidates,
                 async (entry, exit, ct) =>
                 {
                     var sw = System.Diagnostics.Stopwatch.StartNew();
-                    var ok = await _manager.ValidateEdgeAsync(entry.Hop, exit.Hop, dest, ct)
+                    var ok = await edgeTester.ValidateEdgeAsync(entry.Hop, exit.Hop, dest, ct)
                         .ConfigureAwait(false);
                     sw.Stop();
                     return new TwoHopEdgeResult(ok, Reliability: ok ? 1.0 : 0.0, E2eLatencyMs: (int)sw.ElapsedMilliseconds);
@@ -865,14 +1014,12 @@ public sealed class ChainControlForm : Form
             }
             else
             {
-                var snap = _winProxy.Capture();
-                snap.ProxyEnable = 0;
-                snap.ProxyServer = "";
-                _winProxy.SaveBackup(snap);
-                _winProxy.Restore(snap);
-                _winProxy.ClearBackup();
-                MessageBox.Show(this, "System proxy disabled (no prior backup found).", "Proxy Chains",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this,
+                    "No Windows proxy backup is pending. Nothing to restore.\n\n" +
+                    "A backup is created when the gateway enables system proxy.",
+                    "Proxy Chains",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
             }
 
             RefreshStatus();
