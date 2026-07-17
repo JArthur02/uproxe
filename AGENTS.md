@@ -3,10 +3,10 @@
 ## Cursor Cloud specific instructions
 
 ### What this repo is
-`uProxe` / **μProxy Tool** is a Windows proxy scraper, checker, and (in v3) local proxy-chain gateway.
+`uProxe` / **μProxy Tool** is a Windows proxy scraper, checker, and (v3) local proxy-chain gateway.
 
-- **Immutable 2.0 release snapshot (binaries only):** `cursor/publish-win-x64-zip-35cc` (`dist/*.zip`). Do not develop features on that branch.
-- **Active v3 development branch:** `cursor/v3-proxychains` — reconciled from PR #15 source tip (`cursor/fix-secretscan-toolbar-clip-f851`) + current `main`.
+- **Immutable pre-chains 2.0 ZIP snapshot:** `cursor/publish-win-x64-zip-35cc` (`dist/*.zip` from before chaining). Prefer v3 preview zips rebuilt from `cursor/v3-proxychains` at release time.
+- **Active v3 development branch:** `cursor/v3-proxychains`
 - Solution: `UProxyTool.sln` with `src/UProxy.Core`, `src/UProxy.UI`, `tests/UProxy.Core.Tests`.
 
 ### Toolchain
@@ -23,6 +23,6 @@
 - `src/UProxy.UI` targets `net10.0-windows` (WinForms). It **builds** on Linux because `Directory.Build.props` sets `EnableWindowsTargeting=true`, but the GUI **cannot run on Linux**.
 - `src/UProxy.Core` and the test project target plain `net10.0` and are fully cross-platform.
 - v3 proxy chaining is **driver-free / TCP-only** for MVP: local loopback HTTP+SOCKS5 gateways + optional WinINET pointing at the local HTTP listener. Transparent all-app / UDP / WFP / WinDivert / TUN are deferred.
-- Product version stays **2.x** until MVP acceptance; then bump to **3.0.0**. Development builds may show an informational “v3 proxychains development build” label.
+- Product version stays **2.x** until MVP acceptance on Windows; then bump to **3.0.0**. UI About text identifies “v3 proxychains development build”.
 - Legacy 1.81 files (`tool.exe`, `Ionic.Zip.dll`, `check.ini`, etc.) are not used by the 2.0/3.0 solution.
-- Do **not** re-add third-party Proxifier binaries to this branch. They are compiled proprietary artifacts (no usable source to adapt), outside the driver-free v3 MVP. If transparent routing is ever needed later, prefer documented open-source designs (e.g. ProxiFyre / ProxyBridge / WFP docs)—not reverse-engineering commercial EXEs.
+- Do **not** re-add third-party Proxifier binaries to this branch.
