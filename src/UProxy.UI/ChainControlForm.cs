@@ -73,6 +73,18 @@ public sealed class ChainControlForm : Form
         Dock = DockStyle.Fill,
         IntegralHeight = false
     };
+    private readonly ComboBox _fixedProfilePicker = new()
+    {
+        DropDownStyle = ComboBoxStyle.DropDownList,
+        Width = 180,
+        IntegralHeight = false
+    };
+    private readonly ComboBox _poolPicker = new()
+    {
+        DropDownStyle = ComboBoxStyle.DropDownList,
+        Width = 180,
+        IntegralHeight = false
+    };
 
     private Button? _btnStartStrict;
     private System.Windows.Forms.Timer? _liveTimer;
@@ -264,11 +276,12 @@ public sealed class ChainControlForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 2,
-            RowCount = 2,
+            RowCount = 3,
             Padding = new Padding(8)
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, SideColumnWidth));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
@@ -293,15 +306,48 @@ public sealed class ChainControlForm : Form
 
         side.Controls.AddRange([addSession, paste, remove, up, down, save, test, _btnStartStrict]);
 
+        var toolbar = BuildFixedProfileToolbar();
         var nameRow = BuildNameRow(_fixedName);
 
-        root.Controls.Add(_fixedHops, 0, 0);
+        root.Controls.Add(toolbar, 0, 0);
+        root.Controls.Add(_fixedHops, 0, 1);
         root.Controls.Add(side, 1, 0);
-        root.SetRowSpan(side, 2);
-        root.Controls.Add(nameRow, 0, 1);
+        root.SetRowSpan(side, 3);
+        root.Controls.Add(nameRow, 0, 2);
 
         page.Controls.Add(root);
         return page;
+    }
+
+    private FlowLayoutPanel BuildFixedProfileToolbar()
+    {
+        var bar = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            Dock = DockStyle.Top,
+            Margin = new Padding(0, 0, 0, 6),
+            Padding = new Padding(0)
+        };
+
+        var btnNew = MakeToolbarButton("New");
+        var btnLoad = MakeToolbarButton("Load");
+        var btnSave = MakeToolbarButton("Save");
+        var btnSaveAs = MakeToolbarButton("Save As");
+        var btnDelete = MakeToolbarButton("Delete");
+
+        btnNew.Click += (_, _) => NewFixedProfile();
+        btnLoad.Click += (_, _) => LoadFixedProfileFromPicker();
+        btnSave.Click += (_, _) => SaveFixedProfile();
+        btnSaveAs.Click += (_, _) => SaveFixedProfileAs();
+        btnDelete.Click += (_, _) => DeleteFixedProfile();
+
+        _fixedProfilePicker.Margin = new Padding(0, 2, 8, 2);
+        bar.Controls.Add(_fixedProfilePicker);
+        bar.Controls.AddRange([btnNew, btnLoad, btnSave, btnSaveAs, btnDelete]);
+        return bar;
     }
 
     private TabPage BuildPoolTab()
@@ -311,11 +357,12 @@ public sealed class ChainControlForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 2,
-            RowCount = 3,
+            RowCount = 4,
             Padding = new Padding(8)
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, SideColumnWidth));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -350,18 +397,58 @@ public sealed class ChainControlForm : Form
         ]);
         _poolMode.SelectedIndex = 0;
 
+        var toolbar = BuildPoolProfileToolbar();
         var options = BuildPoolOptionsPanel();
         var nameRow = BuildNameRow(_poolName);
 
-        root.Controls.Add(_poolCandidates, 0, 0);
+        root.Controls.Add(toolbar, 0, 0);
+        root.Controls.Add(_poolCandidates, 0, 1);
         root.Controls.Add(side, 1, 0);
-        root.SetRowSpan(side, 3);
-        root.Controls.Add(options, 0, 1);
-        root.Controls.Add(nameRow, 0, 2);
+        root.SetRowSpan(side, 4);
+        root.Controls.Add(options, 0, 2);
+        root.Controls.Add(nameRow, 0, 3);
 
         page.Controls.Add(root);
         return page;
     }
+
+    private FlowLayoutPanel BuildPoolProfileToolbar()
+    {
+        var bar = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = true,
+            FlowDirection = FlowDirection.LeftToRight,
+            Dock = DockStyle.Top,
+            Margin = new Padding(0, 0, 0, 6),
+            Padding = new Padding(0)
+        };
+
+        var btnNew = MakeToolbarButton("New");
+        var btnLoad = MakeToolbarButton("Load");
+        var btnSave = MakeToolbarButton("Save");
+        var btnDelete = MakeToolbarButton("Delete");
+
+        btnNew.Click += (_, _) => NewPoolProfile();
+        btnLoad.Click += (_, _) => LoadPoolFromPicker();
+        btnSave.Click += (_, _) => SavePool();
+        btnDelete.Click += (_, _) => DeletePoolProfile();
+
+        _poolPicker.Margin = new Padding(0, 2, 8, 2);
+        bar.Controls.Add(_poolPicker);
+        bar.Controls.AddRange([btnNew, btnLoad, btnSave, btnDelete]);
+        return bar;
+    }
+
+    private static Button MakeToolbarButton(string text) =>
+        new()
+        {
+            Text = text,
+            AutoSize = true,
+            Margin = new Padding(0, 0, 6, 0),
+            MinimumSize = new Size(64, 28)
+        };
 
     private TableLayoutPanel BuildPoolOptionsPanel()
     {
@@ -462,7 +549,7 @@ public sealed class ChainControlForm : Form
     {
         _btnStart.Click += async (_, _) => await StartFromHeaderAsync();
         _btnStop.Click += async (_, _) => await StopGatewayAsync();
-        _btnRestore.Click += (_, _) => RestoreWindowsProxy();
+        _btnRestore.Click += async (_, _) => await RestoreWindowsProxyAsync();
         _btnExitIp.Click += async (_, _) => await CheckExitIpAsync();
         _btnCopyHttp.Click += (_, _) => CopyGatewayEndpoint(_gateway.HttpPort, "HTTP");
         _btnCopySocks.Click += (_, _) => CopyGatewayEndpoint(_gateway.SocksPort, "SOCKS");
@@ -483,6 +570,8 @@ public sealed class ChainControlForm : Form
         {
             EnsureLiveTimer();
             _liveTimer!.Start();
+            RefreshFixedProfilePicker(_fixedName.Text.Trim());
+            RefreshPoolPicker(_poolName.Text.Trim());
             RefreshStatus();
         };
         FormClosed += (_, _) =>
@@ -749,11 +838,7 @@ public sealed class ChainControlForm : Form
         {
             if (_poolItems.Count == 0)
             {
-                MessageBox.Show(this,
-                    "Add at least one Smart Pool candidate, then click Start.",
-                    "Proxy Chains",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
+                ShowBanner("Add at least one Smart Pool candidate, then click Start.", success: false);
                 return;
             }
 
@@ -766,11 +851,7 @@ public sealed class ChainControlForm : Form
 
         if (_fixedItems.Count == 0)
         {
-            MessageBox.Show(this,
-                "Add at least one Fixed Chain hop, then click Start.",
-                "Proxy Chains",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
+            ShowBanner("Add at least one Fixed Chain hop, then click Start.", success: false);
             return;
         }
 
@@ -814,11 +895,323 @@ public sealed class ChainControlForm : Form
 
                 break;
             }
-            catch
+            catch (Exception ex)
             {
-                // ignore corrupt profile
+                ShowBanner($"Could not load profile '{name}': {ex.Message}", success: false);
             }
         }
+    }
+
+    private void RefreshFixedProfilePicker(string? selectName = null)
+    {
+        var current = selectName ?? (_fixedProfilePicker.SelectedItem as string);
+        _fixedProfilePicker.Items.Clear();
+        foreach (var n in _profiles.ListNames())
+            _fixedProfilePicker.Items.Add(n);
+
+        if (!string.IsNullOrWhiteSpace(current))
+        {
+            var idx = _fixedProfilePicker.Items.IndexOf(current);
+            if (idx < 0)
+            {
+                for (var i = 0; i < _fixedProfilePicker.Items.Count; i++)
+                {
+                    if (string.Equals(_fixedProfilePicker.Items[i]?.ToString(), current, StringComparison.OrdinalIgnoreCase))
+                    {
+                        idx = i;
+                        break;
+                    }
+                }
+            }
+
+            if (idx >= 0)
+                _fixedProfilePicker.SelectedIndex = idx;
+            else
+                _fixedProfilePicker.SelectedIndex = -1;
+        }
+        else
+        {
+            _fixedProfilePicker.SelectedIndex = -1;
+        }
+    }
+
+    private void RefreshPoolPicker(string? selectName = null)
+    {
+        var current = selectName ?? (_poolPicker.SelectedItem as string);
+        _poolPicker.Items.Clear();
+        foreach (var n in _pools.ListNames())
+            _poolPicker.Items.Add(n);
+
+        if (!string.IsNullOrWhiteSpace(current))
+        {
+            var idx = _poolPicker.Items.IndexOf(current);
+            if (idx < 0)
+            {
+                for (var i = 0; i < _poolPicker.Items.Count; i++)
+                {
+                    if (string.Equals(_poolPicker.Items[i]?.ToString(), current, StringComparison.OrdinalIgnoreCase))
+                    {
+                        idx = i;
+                        break;
+                    }
+                }
+            }
+
+            if (idx >= 0)
+                _poolPicker.SelectedIndex = idx;
+            else
+                _poolPicker.SelectedIndex = -1;
+        }
+        else
+        {
+            _poolPicker.SelectedIndex = -1;
+        }
+    }
+
+    private void NewFixedProfile()
+    {
+        _fixedItems.Clear();
+        _fixedName.Text = "strict-chain";
+        _fixedProfilePicker.SelectedIndex = -1;
+        ClearBanner();
+        RefreshStatus();
+    }
+
+    private void LoadFixedProfileFromPicker()
+    {
+        var name = _fixedProfilePicker.SelectedItem as string;
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            ShowBanner("Select a profile to load.", success: false);
+            return;
+        }
+
+        try
+        {
+            var p = _profiles.Load(name);
+            if (p is null)
+            {
+                ShowBanner($"Profile '{name}' was not found.", success: false);
+                RefreshFixedProfilePicker();
+                return;
+            }
+
+            _fixedName.Text = p.Name;
+            _fixedItems.Clear();
+            foreach (var h in p.Hops)
+                _fixedItems.Add(new HopItem(h));
+
+            if (!string.IsNullOrWhiteSpace(p.CandidatePoolId))
+            {
+                _poolName.Text = p.CandidatePoolId;
+                var pool = _pools.Load(p.CandidatePoolId);
+                if (pool is not null)
+                {
+                    _poolItems.Clear();
+                    foreach (var c in pool)
+                        TryAddPool(c);
+                    RefreshPoolPicker(p.CandidatePoolId);
+                }
+            }
+
+            RefreshFixedProfilePicker(p.Name);
+            ShowBanner($"Loaded chain \"{p.Name}\".", success: true);
+            RefreshStatus();
+        }
+        catch (Exception ex)
+        {
+            ShowBanner($"Could not load profile '{name}': {ex.Message}", success: false);
+        }
+    }
+
+    private void SaveFixedProfileAs()
+    {
+        var suggested = string.IsNullOrWhiteSpace(_fixedName.Text) ? "strict-chain" : _fixedName.Text.Trim();
+        var name = PromptForName("Save chain as", suggested);
+        if (name is null)
+            return;
+
+        _fixedName.Text = name;
+        SaveFixedProfile();
+    }
+
+    private void DeleteFixedProfile()
+    {
+        var name = _fixedProfilePicker.SelectedItem as string;
+        if (string.IsNullOrWhiteSpace(name))
+            name = _fixedName.Text.Trim();
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            ShowBanner("Select or name a profile to delete.", success: false);
+            return;
+        }
+
+        var confirm = MessageBox.Show(this,
+            $"Delete chain profile \"{name}\"?\n\nThis cannot be undone.",
+            "Delete profile",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2);
+        if (confirm != DialogResult.Yes)
+            return;
+
+        try
+        {
+            if (!_profiles.Delete(name))
+            {
+                ShowBanner($"Profile '{name}' was not found.", success: false);
+                RefreshFixedProfilePicker();
+                return;
+            }
+
+            RefreshFixedProfilePicker();
+            ShowBanner($"Deleted chain \"{name}\".", success: true);
+        }
+        catch (Exception ex)
+        {
+            ShowBanner($"Delete failed: {ex.Message}", success: false);
+        }
+    }
+
+    private void NewPoolProfile()
+    {
+        _poolItems.Clear();
+        _poolName.Text = "default-pool";
+        _poolPicker.SelectedIndex = -1;
+        ClearBanner();
+        RefreshStatus();
+    }
+
+    private void LoadPoolFromPicker()
+    {
+        var name = _poolPicker.SelectedItem as string;
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            ShowBanner("Select a pool to load.", success: false);
+            return;
+        }
+
+        try
+        {
+            var pool = _pools.Load(name);
+            if (pool is null)
+            {
+                ShowBanner($"Pool '{name}' was not found.", success: false);
+                RefreshPoolPicker();
+                return;
+            }
+
+            _poolName.Text = name;
+            _poolItems.Clear();
+            foreach (var c in pool)
+                TryAddPool(c);
+
+            RefreshPoolPicker(name);
+            RefreshPoolBadges();
+            ShowBanner($"Loaded pool \"{name}\" ({_poolItems.Count} candidate(s)).", success: true);
+            RefreshStatus();
+        }
+        catch (Exception ex)
+        {
+            ShowBanner($"Could not load pool '{name}': {ex.Message}", success: false);
+        }
+    }
+
+    private void DeletePoolProfile()
+    {
+        var name = _poolPicker.SelectedItem as string;
+        if (string.IsNullOrWhiteSpace(name))
+            name = _poolName.Text.Trim();
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            ShowBanner("Select or name a pool to delete.", success: false);
+            return;
+        }
+
+        var confirm = MessageBox.Show(this,
+            $"Delete pool \"{name}\"?\n\nThis cannot be undone.",
+            "Delete pool",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2);
+        if (confirm != DialogResult.Yes)
+            return;
+
+        try
+        {
+            if (!_pools.Delete(name))
+            {
+                ShowBanner($"Pool '{name}' was not found.", success: false);
+                RefreshPoolPicker();
+                return;
+            }
+
+            RefreshPoolPicker();
+            ShowBanner($"Deleted pool \"{name}\".", success: true);
+        }
+        catch (Exception ex)
+        {
+            ShowBanner($"Delete failed: {ex.Message}", success: false);
+        }
+    }
+
+    private string? PromptForName(string title, string defaultName)
+    {
+        using var dlg = new Form
+        {
+            Text = title,
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false,
+            ShowInTaskbar = false,
+            AutoScaleMode = AutoScaleMode.Dpi,
+            AutoScaleDimensions = new SizeF(96F, 96F),
+            ClientSize = new Size(360, 110),
+            Font = Font
+        };
+
+        var label = new Label
+        {
+            Text = "Name:",
+            AutoSize = true,
+            Location = new Point(12, 16)
+        };
+        var box = new TextBox
+        {
+            Text = defaultName,
+            Width = 320,
+            Location = new Point(12, 40)
+        };
+        var ok = new Button
+        {
+            Text = "OK",
+            DialogResult = DialogResult.OK,
+            Location = new Point(176, 72),
+            Width = 75
+        };
+        var cancel = new Button
+        {
+            Text = "Cancel",
+            DialogResult = DialogResult.Cancel,
+            Location = new Point(257, 72),
+            Width = 75
+        };
+        dlg.Controls.AddRange([label, box, ok, cancel]);
+        dlg.AcceptButton = ok;
+        dlg.CancelButton = cancel;
+
+        if (dlg.ShowDialog(this) != DialogResult.OK)
+            return null;
+
+        var name = box.Text.Trim();
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            ShowBanner("Enter a name.", success: false);
+            return null;
+        }
+
+        return name;
     }
 
     private void AddFixedFromSession()
@@ -826,8 +1219,7 @@ public sealed class ChainControlForm : Form
         var alive = _getAliveResults().Where(r => r.IsAlive).ToList();
         if (alive.Count == 0)
         {
-            MessageBox.Show(this, "No alive proxies in the current session.", "Proxy Chains",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            ShowBanner("No alive proxies in the current session.", success: false);
             return;
         }
 
@@ -842,7 +1234,10 @@ public sealed class ChainControlForm : Form
     {
         var text = Clipboard.GetText();
         if (string.IsNullOrWhiteSpace(text))
+        {
+            ShowBanner("Clipboard is empty.", success: false);
             return;
+        }
 
         // Preserve paste order (line-oriented).
         var added = 0;
@@ -855,8 +1250,7 @@ public sealed class ChainControlForm : Form
         }
 
         if (added == 0)
-            MessageBox.Show(this, "No proxies found on the clipboard.", "Proxy Chains",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            ShowBanner("No proxies found on the clipboard.", success: false);
     }
 
     private void RemoveSelectedFixed()
@@ -885,11 +1279,7 @@ public sealed class ChainControlForm : Form
             return;
         if (_fixedItems.Count >= ChainDialer.MaxHops)
         {
-            MessageBox.Show(this,
-                $"Fixed chains support at most {ChainDialer.MaxHops} hops.",
-                "Proxy Chains",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
+            ShowBanner($"Fixed chains support at most {ChainDialer.MaxHops} hops.", success: false);
             return;
         }
 
@@ -901,11 +1291,9 @@ public sealed class ChainControlForm : Form
         var matching = _getAliveResults().Where(MatchesEligibilityPolicy).ToList();
         if (matching.Count == 0)
         {
-            MessageBox.Show(this,
+            ShowBanner(
                 $"No proxies in the current session match the eligibility policy ({CurrentPolicyLabel()}).",
-                "Proxy Chains",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
+                success: false);
             return;
         }
 
@@ -922,8 +1310,7 @@ public sealed class ChainControlForm : Form
         var parsed = ProxyParser.ExtractFromText(text);
         if (parsed.Count == 0)
         {
-            MessageBox.Show(this, "No proxies found on the clipboard.", "Proxy Chains",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            ShowBanner("No proxies found on the clipboard.", success: false);
             return;
         }
 
@@ -952,13 +1339,11 @@ public sealed class ChainControlForm : Form
 
         if (added == 0)
         {
-            MessageBox.Show(this,
+            ShowBanner(
                 skipped > 0
                     ? "No new proxies added (duplicates or empty paste)."
                     : "No proxies found to add.",
-                "Proxy Chains",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information);
+                success: false);
         }
         else if (skipped > 0)
         {
@@ -1154,15 +1539,13 @@ public sealed class ChainControlForm : Form
         var name = _fixedName.Text.Trim();
         if (string.IsNullOrWhiteSpace(name))
         {
-            MessageBox.Show(this, "Enter a chain name.", "Proxy Chains",
-                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            ShowBanner("Enter a chain name.", success: false);
             return;
         }
 
         if (_fixedItems.Count == 0)
         {
-            MessageBox.Show(this, "Add at least one hop.", "Proxy Chains",
-                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            ShowBanner("Add at least one hop.", success: false);
             return;
         }
 
@@ -1171,12 +1554,12 @@ public sealed class ChainControlForm : Form
             var profile = BuildFixedProfile(name);
             _profiles.Save(profile);
             PersistActiveProfileId(profile.Id);
-            MessageBox.Show(this, $"Saved chain \"{name}\".", "Proxy Chains",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            RefreshFixedProfilePicker(name);
+            ShowBanner($"Saved chain \"{name}\".", success: true);
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "Save failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            ShowBanner($"Save failed: {ex.Message}", success: false);
         }
     }
 
@@ -1185,20 +1568,19 @@ public sealed class ChainControlForm : Form
         var name = _poolName.Text.Trim();
         if (string.IsNullOrWhiteSpace(name))
         {
-            MessageBox.Show(this, "Enter a pool name.", "Proxy Chains",
-                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            ShowBanner("Enter a pool name.", success: false);
             return;
         }
 
         try
         {
             _pools.Save(name, _poolItems.Select(i => i.Candidate).ToList());
-            MessageBox.Show(this, $"Saved pool \"{name}\".", "Proxy Chains",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            RefreshPoolPicker(name);
+            ShowBanner($"Saved pool \"{name}\".", success: true);
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "Save failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            ShowBanner($"Save failed: {ex.Message}", success: false);
         }
     }
 
@@ -1206,18 +1588,13 @@ public sealed class ChainControlForm : Form
     {
         if (_fixedItems.Count == 0)
         {
-            MessageBox.Show(this, "Add at least one hop to test.", "Proxy Chains",
-                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            ShowBanner("Add at least one hop to test.", success: false);
             return;
         }
 
         if (_fixedItems.Count > ChainDialer.MaxHops)
         {
-            MessageBox.Show(this,
-                $"Fixed chains support at most {ChainDialer.MaxHops} hops.",
-                "Proxy Chains",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
+            ShowBanner($"Fixed chains support at most {ChainDialer.MaxHops} hops.", success: false);
             return;
         }
 
@@ -1234,15 +1611,11 @@ public sealed class ChainControlForm : Form
         {
             var dest = TestDestination();
             var ok = await tester.ValidateChainAsync(dest, CancellationToken.None).ConfigureAwait(true);
-            MessageBox.Show(this,
-                ok ? $"Chain OK → {dest}" : $"Chain failed → {dest}",
-                "Test chain",
-                MessageBoxButtons.OK,
-                ok ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+            ShowBanner(ok ? $"Chain OK → {dest}" : $"Chain failed → {dest}", success: ok);
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "Test chain", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            ShowBanner($"Test chain failed: {ex.Message}", success: false);
         }
         finally
         {
@@ -1255,18 +1628,13 @@ public sealed class ChainControlForm : Form
     {
         if (_fixedItems.Count == 0)
         {
-            MessageBox.Show(this, "Add at least one hop.", "Proxy Chains",
-                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            ShowBanner("Add at least one hop.", success: false);
             return;
         }
 
         if (_fixedItems.Count > ChainDialer.MaxHops)
         {
-            MessageBox.Show(this,
-                $"Fixed chains support at most {ChainDialer.MaxHops} hops.",
-                "Proxy Chains",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
+            ShowBanner($"Fixed chains support at most {ChainDialer.MaxHops} hops.", success: false);
             return;
         }
 
@@ -1290,12 +1658,9 @@ public sealed class ChainControlForm : Form
         var eligible = EligibleCandidates();
         if (eligible.Count == 0)
         {
-            MessageBox.Show(this,
-                $"0 of {total} eligible under current policy ({CurrentPolicyLabel()}).\n\n" +
-                "Import matching proxies from the session, widen the eligibility policy, or wait until candidates are checked.",
-                "Proxy Chains",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
+            ShowBanner(
+                $"0 of {total} eligible under current policy ({CurrentPolicyLabel()}). Import matching proxies or widen eligibility.",
+                success: false);
             return;
         }
 
@@ -1341,15 +1706,11 @@ public sealed class ChainControlForm : Form
         var eligible = EligibleCandidates();
         if (eligible.Count < 2)
         {
-            MessageBox.Show(this,
+            ShowBanner(
                 eligible.Count == 0
-                    ? $"0 of {total} eligible under current policy ({CurrentPolicyLabel()}).\n\n" +
-                      "Need at least two matching candidates for Auto 2-hop."
-                    : $"{eligible.Count} of {total} eligible under current policy ({CurrentPolicyLabel()}).\n\n" +
-                      "Need at least two matching candidates for Auto 2-hop.",
-                "Proxy Chains",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
+                    ? $"0 of {total} eligible under current policy ({CurrentPolicyLabel()}). Need at least two for Auto 2-hop."
+                    : $"{eligible.Count} of {total} eligible under current policy ({CurrentPolicyLabel()}). Need at least two for Auto 2-hop.",
+                success: false);
             return;
         }
 
@@ -1391,7 +1752,7 @@ public sealed class ChainControlForm : Form
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "Auto 2-hop chain", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            ShowBanner($"Auto 2-hop failed: {ex.Message}", success: false);
             return;
         }
         finally
@@ -1405,8 +1766,7 @@ public sealed class ChainControlForm : Form
 
         if (chosen is null)
         {
-            MessageBox.Show(this, "No compatible entry→exit pair found.", "Auto 2-hop chain",
-                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            ShowBanner("No compatible entry→exit pair found.", success: false);
             return;
         }
 
@@ -1448,8 +1808,16 @@ public sealed class ChainControlForm : Form
 
         _routing.SetStarting(profile.Name, modeLabel);
         RefreshStatus();
-        ClearBanner();
-        ShowBanner("Starting gateway…", success: true);
+        if (!_lblBanner.Visible
+            || !_lblBanner.Text.StartsWith("Using ", StringComparison.Ordinal))
+        {
+            ClearBanner();
+            ShowBanner("Starting gateway…", success: true);
+        }
+        else
+        {
+            ShowBanner($"{_lblBanner.Text}. Starting gateway…", success: true);
+        }
 
         _manager.VerificationDestination = TestDestination();
 
@@ -1490,7 +1858,6 @@ public sealed class ChainControlForm : Form
         catch (Exception ex)
         {
             _routing.SetOff();
-            MessageBox.Show(this, ex.Message, "Start failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
             ShowBanner($"Start failed: {ex.Message}", success: false);
             RefreshStatus();
         }
@@ -1582,27 +1949,26 @@ public sealed class ChainControlForm : Form
         IReadOnlyList<PoolCandidate>? pool)
     {
         var suggested = ex.SuggestedPort;
-        var msg = suggested is int s
-            ? $"{ex.Message}\n\nUse suggested port {s} and save?\nOpen Settings to pick ports manually?\nOr Cancel."
-            : $"{ex.Message}\n\nOpen Settings to pick a free port, or Cancel.";
-
-        var result = MessageBox.Show(this, msg, "Port in use",
-            suggested is not null ? MessageBoxButtons.YesNoCancel : MessageBoxButtons.RetryCancel,
-            MessageBoxIcon.Warning);
+        using var dlg = new PortInUseDialog(ex.Message, suggested);
+        var result = dlg.ShowDialog(this);
 
         if (suggested is int port && result == DialogResult.Yes)
         {
             // Heuristic: if HTTP port collided, update HTTP; else SOCKS.
-            if (ex.Port == _settings.ChainHttpPort || ex.Port == _gateway.HttpPort)
+            var usedHttp = ex.Port == _settings.ChainHttpPort || ex.Port == _gateway.HttpPort;
+            if (usedHttp)
                 _settings.ChainHttpPort = port;
             else
                 _settings.ChainSocksPort = port;
             _settings.Save(_settingsPath);
+            ShowBanner(
+                usedHttp ? $"Using HTTP :{port}" : $"Using SOCKS :{port}",
+                success: true);
             await ApplyAndStartAsync(profile, pool).ConfigureAwait(true);
             return;
         }
 
-        if (result == DialogResult.No || (suggested is null && result == DialogResult.Retry))
+        if (result == DialogResult.No)
         {
             using var settings = new SettingsForm(_settings);
             if (settings.ShowDialog(this) == DialogResult.OK)
@@ -1625,7 +1991,6 @@ public sealed class ChainControlForm : Form
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "Stop failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
             ShowBanner($"Stop failed: {ex.Message}", success: false);
         }
         finally
@@ -1634,21 +1999,21 @@ public sealed class ChainControlForm : Form
         }
     }
 
-    private void RestoreWindowsProxy()
+    private async Task RestoreWindowsProxyAsync()
     {
         if (!_winProxy.IsSupported)
         {
-            MessageBox.Show(this, "System proxy restore is only available on Windows.", "Proxy Chains",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            ShowBanner("System proxy restore is only available on Windows.", success: false);
             return;
         }
 
+        SetBusy(true);
         try
         {
             if (_gateway.IsRunning && _gateway.SystemProxyActive)
             {
                 // Stopping the gateway restores WinINET when we enabled it.
-                _gateway.StopAsync().GetAwaiter().GetResult();
+                await _gateway.StopAsync().ConfigureAwait(true);
                 _routing.SetOff();
                 RefreshStatus();
                 ShowBanner("Gateway stopped and Windows proxy restored.", success: true);
@@ -1662,19 +2027,20 @@ public sealed class ChainControlForm : Form
             }
             else
             {
-                MessageBox.Show(this,
-                    "No Windows proxy backup is pending. Nothing to restore.\n\n" +
-                    "A backup is created when the gateway enables system proxy.",
-                    "Proxy Chains",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
+                ShowBanner(
+                    "No Windows proxy backup is pending. Nothing to restore.",
+                    success: true);
             }
 
             RefreshStatus();
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "Restore failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            ShowBanner($"Restore failed: {ex.Message}", success: false);
+        }
+        finally
+        {
+            SetBusy(false);
         }
     }
 
@@ -1682,8 +2048,7 @@ public sealed class ChainControlForm : Form
     {
         if (!_gateway.IsRunning || _manager.GetActiveHops().Count == 0)
         {
-            MessageBox.Show(this, "Start a chain first.", "Exit IP",
-                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            ShowBanner("Start a chain first.", success: false);
             return;
         }
 
@@ -1705,8 +2070,6 @@ public sealed class ChainControlForm : Form
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "Exit IP check failed",
-                MessageBoxButtons.OK, MessageBoxIcon.Error);
             ShowBanner($"Exit IP check failed: {ex.Message}", success: false);
         }
         finally
@@ -1855,6 +2218,83 @@ public sealed class ChainControlForm : Form
             };
             buttons.Controls.Add(cancel);
 
+            Controls.Add(label);
+            Controls.Add(buttons);
+        }
+    }
+
+    private sealed class PortInUseDialog : Form
+    {
+        public PortInUseDialog(string message, int? suggestedPort)
+        {
+            Text = "Port in use";
+            StartPosition = FormStartPosition.CenterParent;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            ShowInTaskbar = false;
+            AutoScaleMode = AutoScaleMode.Dpi;
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            ClientSize = new Size(440, suggestedPort is not null ? 180 : 150);
+            Font = new Font("Segoe UI", 9f);
+
+            var label = new Label
+            {
+                Text = message,
+                AutoSize = false,
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.TopLeft,
+                Padding = new Padding(12, 12, 12, 0)
+            };
+
+            var buttons = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Bottom,
+                FlowDirection = FlowDirection.RightToLeft,
+                WrapContents = true,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Padding = new Padding(8, 8, 8, 10)
+            };
+
+            var cancel = new Button
+            {
+                Text = "Cancel",
+                DialogResult = DialogResult.Cancel,
+                AutoSize = true,
+                MinimumSize = new Size(88, 32),
+                Margin = new Padding(6, 0, 0, 0)
+            };
+            var choose = new Button
+            {
+                Text = "Choose ports…",
+                DialogResult = DialogResult.No,
+                AutoSize = true,
+                MinimumSize = new Size(110, 32),
+                Margin = new Padding(6, 0, 0, 0)
+            };
+            buttons.Controls.Add(cancel);
+            buttons.Controls.Add(choose);
+
+            if (suggestedPort is int port)
+            {
+                var useSuggested = new Button
+                {
+                    Text = $"Use port {port}",
+                    DialogResult = DialogResult.Yes,
+                    AutoSize = true,
+                    MinimumSize = new Size(110, 32),
+                    Margin = new Padding(6, 0, 0, 0)
+                };
+                buttons.Controls.Add(useSuggested);
+                AcceptButton = useSuggested;
+            }
+            else
+            {
+                AcceptButton = choose;
+            }
+
+            CancelButton = cancel;
             Controls.Add(label);
             Controls.Add(buttons);
         }
