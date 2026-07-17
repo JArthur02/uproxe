@@ -57,7 +57,8 @@ public sealed class ExportForm : Form
         {
             Text = "&Export",
             AutoSize = true,
-            Padding = new Padding(20, 6, 20, 6),
+            Padding = new Padding(20, 8, 20, 8),
+            MinimumSize = new Size(100, 36),
             Anchor = AnchorStyles.None
         };
         exportBtn.Click += async (_, _) => await DoExportAsync();

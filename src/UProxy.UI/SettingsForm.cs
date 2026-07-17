@@ -115,8 +115,8 @@ public sealed class SettingsForm : Form
             Padding = new Padding(12, 8, 12, 12),
             WrapContents = false
         };
-        var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, AutoSize = true, Padding = new Padding(16, 4, 16, 4) };
-        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, AutoSize = true, Padding = new Padding(16, 4, 16, 4), Margin = new Padding(0, 0, 8, 0) };
+        var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, AutoSize = true, Padding = new Padding(16, 6, 16, 6), MinimumSize = new Size(88, 32) };
+        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, AutoSize = true, Padding = new Padding(16, 6, 16, 6), MinimumSize = new Size(88, 32), Margin = new Padding(0, 0, 8, 0) };
         ok.Click += (_, _) =>
         {
             _settings.Concurrency = (int)_concurrency.Value;

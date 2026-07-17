@@ -80,4 +80,38 @@ public class UiLayoutGuardTests
         Assert.Contains("ExportForm.cs", names);
         Assert.Contains("SecretScanForm.cs", names);
     }
+
+    [Fact]
+    public void SecretScanForm_UsesRootTableLayoutAndButtonFloors()
+    {
+        var src = File.ReadAllText(Path.Combine(UiDir, "SecretScanForm.cs"));
+        // Root TableLayoutPanel (not Dock.Top FlowLayout with fixed Height) is what stops
+        // File/Folder/Scan from being vertically clipped after a monitor/DPI change.
+        Assert.Contains("new TableLayoutPanel", src, StringComparison.Ordinal);
+        Assert.Contains("SizeType.Percent, 100f", src, StringComparison.Ordinal);
+        Assert.Contains("MinimumSize = new Size(64, 32)", src, StringComparison.Ordinal);
+        Assert.Contains("EnsureToolbarFits", src, StringComparison.Ordinal);
+        Assert.DoesNotContain("Height = 40", src, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("SettingsForm.cs")]
+    [InlineData("ExportForm.cs")]
+    [InlineData("SecretScanForm.cs")]
+    public void DialogForms_UseAutoSizeLayouts(string fileName)
+    {
+        var src = File.ReadAllText(Path.Combine(UiDir, fileName));
+        Assert.Contains("AutoSize = true", src, StringComparison.Ordinal);
+        Assert.Contains("TableLayoutPanel", src, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MainForm_ToolbarsAreAutoSizeWrapping()
+    {
+        var src = File.ReadAllText(Path.Combine(UiDir, "MainForm.cs"));
+        Assert.Contains("WrapContents = true", src, StringComparison.Ordinal);
+        // Both top bars must grow with DPI; fixed Height toolbars are forbidden.
+        var flat = System.Text.RegularExpressions.Regex.Replace(src, @"\s+", " ");
+        Assert.Contains("AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = true", flat, StringComparison.Ordinal);
+    }
 }

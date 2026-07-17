@@ -201,7 +201,9 @@ public sealed class MainForm : Form
                  })
         {
             btn.Margin = new Padding(2);
-            btn.Padding = new Padding(8, 2, 8, 2);
+            btn.Padding = new Padding(8, 4, 8, 4);
+            btn.AutoSize = true;
+            btn.MinimumSize = new Size(0, 30);
             _actionBar.Controls.Add(btn);
         }
 
