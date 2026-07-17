@@ -19,13 +19,15 @@ public static class HttpConnectHandshake
         CancellationToken ct = default)
     {
         options ??= new HandshakeOptions();
-        destinationHost = destinationHost.Trim().TrimStart('[').TrimEnd(']');
+        destinationHost = destinationHost.Trim();
+        // CONNECT authority must bracket IPv6 literals (RFC 9110).
+        var authority = FormatConnectAuthority(destinationHost, destinationPort);
         var auth = string.IsNullOrEmpty(proxy.Username) ? ProxyAuthMethod.None : ProxyAuthMethod.Basic;
         var ua = UserAgents.AsciiSafe(options.UserAgent ?? UserAgents.Default);
 
         var sb = new StringBuilder();
-        sb.Append("CONNECT ").Append(destinationHost).Append(':').Append(destinationPort).Append(" HTTP/1.1\r\n");
-        sb.Append("Host: ").Append(destinationHost).Append(':').Append(destinationPort).Append("\r\n");
+        sb.Append("CONNECT ").Append(authority).Append(" HTTP/1.1\r\n");
+        sb.Append("Host: ").Append(authority).Append("\r\n");
         if (!string.IsNullOrEmpty(proxy.Username))
             sb.Append("Proxy-Authorization: ")
               .Append(ProxyAuth.FormatBasicHeader(proxy.Username, proxy.Password)).Append("\r\n");
@@ -71,5 +73,16 @@ public static class HttpConnectHandshake
     {
         var parts = statusLine.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
         return parts.Length >= 2 && int.TryParse(parts[1], out var code) ? code : 0;
+    }
+
+    /// <summary>Formats host:port for CONNECT, bracketing IPv6 literals.</summary>
+    public static string FormatConnectAuthority(string host, int port)
+    {
+        host = host.Trim();
+        var bare = host.TrimStart('[').TrimEnd(']');
+        if (System.Net.IPAddress.TryParse(bare, out var ip) &&
+            ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
+            return $"[{bare}]:{port}";
+        return $"{bare}:{port}";
     }
 }

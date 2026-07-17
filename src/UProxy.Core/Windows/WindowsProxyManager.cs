@@ -47,8 +47,8 @@ public sealed class WindowsProxyManager
     }
 
     /// <summary>
-    /// Opt-in: saves current settings to disk, then applies the given proxy.
-    /// Caller must show a strong warning before invoking.
+    /// Opt-in: saves current settings to disk (only if no pending restore backup exists),
+    /// clears AutoConfigURL so PAC cannot override the gateway, then applies the proxy.
     /// </summary>
     public void SetProxyOptIn(string proxyServer)
     {
@@ -56,14 +56,23 @@ public sealed class WindowsProxyManager
         if (string.IsNullOrWhiteSpace(proxyServer))
             throw new ArgumentException("Proxy server is required.", nameof(proxyServer));
 
-        var snapshot = Capture();
-        SaveBackup(snapshot);
+        // Never overwrite an existing crash-recovery backup — that would lose the user's
+        // original WinINET configuration if we re-enable while a prior backup is pending.
+        if (!HasPendingRestore)
+        {
+            var snapshot = Capture();
+            SaveBackup(snapshot);
+        }
 
         using var key = Registry.CurrentUser.OpenSubKey(InternetSettingsKey, writable: true)
                         ?? throw new InvalidOperationException("Cannot open Internet Settings registry key.");
 
         key.SetValue("ProxyServer", proxyServer);
         key.SetValue("ProxyEnable", 1);
+        // PAC/AutoConfigURL can override ProxyServer; clear it while the gateway is active.
+        // The pending backup retains the original AutoConfigURL for Restore.
+        try { key.DeleteValue("AutoConfigURL", throwOnMissingValue: false); }
+        catch { /* ignore */ }
         NotifyWinInet();
     }
 

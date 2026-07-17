@@ -52,24 +52,18 @@ public sealed class ChainDialer
             var first = hops[0];
             socket = await ConnectTcpAsync(first.Proxy.Host, first.Proxy.Port, ct).ConfigureAwait(false);
             stream = new NetworkStream(socket, ownsSocket: true);
-            socket = null; // owned by stream
-
-            if (first.Transport == ProxyTransport.Tls)
-            {
-                var ssl = new SslStream(stream, leaveInnerStreamOpen: false);
-                await ssl.AuthenticateAsClientAsync(
-                    new SslClientAuthenticationOptions
-                    {
-                        TargetHost = first.Proxy.Host,
-                        EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13
-                    },
-                    ct).ConfigureAwait(false);
-                stream = ssl;
-            }
+            socket = null;
 
             for (var i = 0; i < hops.Count; i++)
             {
                 var hop = hops[i];
+
+                // TLS to this hop (including hop 0 and intermediate TLS proxies) before handshake.
+                if (hop.Transport == ProxyTransport.Tls)
+                {
+                    stream = await WrapTlsAsync(stream, hop.Proxy.Host, ct).ConfigureAwait(false);
+                }
+
                 string nextHost;
                 int nextPort;
                 if (i + 1 < hops.Count)
@@ -169,10 +163,6 @@ public sealed class ChainDialer
         }
     }
 
-    /// <summary>
-    /// Proof helper: use with <see cref="SocketsHttpHandler.ConnectCallback"/> so HttpClient
-    /// traffic traverses the chain before local gateways exist.
-    /// </summary>
     public Func<SocketsHttpConnectionContext, CancellationToken, ValueTask<Stream>> CreateConnectCallback(
         IReadOnlyList<ProxyHop> hops) =>
         async (context, ct) =>
@@ -180,6 +170,27 @@ public sealed class ChainDialer
             var dest = new ChainDestination(context.DnsEndPoint.Host, context.DnsEndPoint.Port);
             return await ConnectAsync(hops, dest, ct).ConfigureAwait(false);
         };
+
+    private static async Task<Stream> WrapTlsAsync(Stream inner, string targetHost, CancellationToken ct)
+    {
+        var ssl = new SslStream(inner, leaveInnerStreamOpen: false);
+        try
+        {
+            await ssl.AuthenticateAsClientAsync(
+                new SslClientAuthenticationOptions
+                {
+                    TargetHost = targetHost.Trim().TrimStart('[').TrimEnd(']'),
+                    EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13
+                },
+                ct).ConfigureAwait(false);
+            return ssl;
+        }
+        catch
+        {
+            await ssl.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
 
     private static async Task HandshakeAsync(
         Stream stream,
@@ -232,8 +243,18 @@ public sealed class ChainDialer
         }
     }
 
-    private static string FormatEndpoint(string host, int port) =>
-        host.Contains(':') && !host.StartsWith('[')
+    internal static string FormatEndpoint(string host, int port)
+    {
+        host = host.Trim();
+        if (IPAddress.TryParse(host.TrimStart('[').TrimEnd(']'), out var ip) &&
+            ip.AddressFamily == AddressFamily.InterNetworkV6)
+        {
+            var bare = host.TrimStart('[').TrimEnd(']');
+            return $"[{bare}]:{port}";
+        }
+
+        return host.Contains(':') && !host.StartsWith('[')
             ? $"[{host}]:{port}"
             : $"{host}:{port}";
+    }
 }

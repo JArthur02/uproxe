@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http;
 using UProxy.Core.Config;
 
@@ -15,23 +16,38 @@ public static class ExitIpChecker
         CancellationToken cancellationToken)
     {
         var url = string.IsNullOrWhiteSpace(exitIpUrl) ? "https://api.ipify.org" : exitIpUrl.Trim();
-        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
-            (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
-            throw new ArgumentException("Exit IP URL must be an absolute http(s) URL.", nameof(exitIpUrl));
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
+            throw new ArgumentException("Exit IP URL must be an absolute https:// URL.", nameof(exitIpUrl));
 
         var handler = new SocketsHttpHandler
         {
             ConnectCallback = connectCallback,
-            AllowAutoRedirect = true
+            AllowAutoRedirect = false
         };
         using var client = new HttpClient(handler)
         {
             Timeout = TimeSpan.FromSeconds(20)
         };
         client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", UserAgents.AsciiSafe(UserAgents.Default));
-        var text = (await client.GetStringAsync(uri, cancellationToken).ConfigureAwait(false)).Trim();
-        if (string.IsNullOrWhiteSpace(text) || text.Length > 128)
-            throw new InvalidOperationException("Exit IP service returned an unexpected body.");
-        return text.Split('\n', '\r', ' ')[0].Trim();
+
+        using var response = await client.GetAsync(uri, HttpCompletionOption.ResponseContentRead, cancellationToken)
+            .ConfigureAwait(false);
+        if ((int)response.StatusCode is >= 300 and < 400)
+            throw new InvalidOperationException("Exit IP service redirected; configure a direct HTTPS endpoint.");
+        if (!response.IsSuccessStatusCode)
+            throw new InvalidOperationException($"Exit IP service returned HTTP {(int)response.StatusCode}.");
+
+        var text = (await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false)).Trim();
+        var token = text.Split('\n', '\r', ' ', '\t')[0].Trim();
+        if (!IsIpLiteral(token))
+            throw new InvalidOperationException("Exit IP service did not return an IP address.");
+        return token;
+    }
+
+    public static bool IsIpLiteral(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length > 64)
+            return false;
+        return IPAddress.TryParse(value.Trim().TrimStart('[').TrimEnd(']'), out _);
     }
 }

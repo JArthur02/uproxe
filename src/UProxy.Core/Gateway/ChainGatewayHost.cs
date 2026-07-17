@@ -166,15 +166,10 @@ public sealed class ChainGatewayHost : IAsyncDisposable
         if (!restore || win is null || !OperatingSystem.IsWindows())
             return Task.CompletedTask;
 
-        try
-        {
-            if (win.HasPendingRestore)
-                win.Restore();
-        }
-        catch
-        {
-            // Best-effort restore; do not block listener shutdown.
-        }
+        // Do not swallow restore failures — leaving WinINET pointed at a stopped
+        // local gateway is worse than surfacing the error to the caller/UI.
+        if (win.HasPendingRestore)
+            win.Restore();
 
         return Task.CompletedTask;
     }

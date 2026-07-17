@@ -9,10 +9,9 @@ public static class ChainSelectionPolicy
 {
     public const int AutoTwoHopShortlistMin = 10;
     public const int AutoTwoHopShortlistMax = 20;
+    public const int DefaultMaxConcurrentEdgeTests = 4;
+    public static readonly TimeSpan DefaultAutoTwoHopBudget = TimeSpan.FromSeconds(45);
 
-    /// <summary>
-    /// Pick the best healthy hop: success rate (desc), then latency (asc), then recency (desc).
-    /// </summary>
     public static PoolCandidate? SelectFastFailover(
         IEnumerable<PoolCandidate> pool,
         ChainHealthTracker? health = null)
@@ -26,10 +25,6 @@ public static class ChainSelectionPolicy
             .FirstOrDefault();
     }
 
-    /// <summary>
-    /// Keep candidates that are healthy in the tracker (unknown = healthy) and optionally
-    /// checked within <paramref name="maxAge"/>.
-    /// </summary>
     public static IEnumerable<PoolCandidate> FilterRecentlyHealthy(
         IEnumerable<PoolCandidate> pool,
         ChainHealthTracker? health = null,
@@ -49,9 +44,6 @@ public static class ChainSelectionPolicy
         }
     }
 
-    /// <summary>
-    /// Shortlist the top N candidates by health (success rate) then latency.
-    /// </summary>
     public static IReadOnlyList<PoolCandidate> Shortlist(
         IEnumerable<PoolCandidate> pool,
         ChainHealthTracker? health = null,
@@ -68,20 +60,16 @@ public static class ChainSelectionPolicy
             .ThenByDescending(c => c.LastChecked ?? DateTimeOffset.MinValue)
             .ToList();
 
-        var take = Math.Clamp(ranked.Count, 0, maxCount);
-        // Prefer at least minCount when available; otherwise take all.
-        if (ranked.Count >= minCount)
-            take = Math.Min(maxCount, ranked.Count);
-        else
-            take = ranked.Count;
+        var take = ranked.Count >= minCount
+            ? Math.Min(maxCount, ranked.Count)
+            : ranked.Count;
 
         return ranked.Take(take).ToList();
     }
 
     /// <summary>
-    /// Conceptually test entry→exit pairs (caller supplies edge test). Prefers compatibility,
-    /// then reliability, then e2e latency, then a soft country-diversity bonus.
-    /// Rejects the same endpoint twice. Optional <paramref name="pinExitId"/> forces exit hop.
+    /// Test entry→exit pairs with a total time budget, cancellation, and bounded concurrency.
+    /// Prefers compatibility, then reliability, then e2e latency, then soft country diversity.
     /// </summary>
     public static async Task<(PoolCandidate Entry, PoolCandidate Exit)?> SelectAutoTwoHopPrivacyAsync(
         IEnumerable<PoolCandidate> pool,
@@ -90,48 +78,99 @@ public static class ChainSelectionPolicy
         ChainHealthTracker? health = null,
         int shortlistMin = AutoTwoHopShortlistMin,
         int shortlistMax = AutoTwoHopShortlistMax,
+        TimeSpan? timeBudget = null,
+        int maxConcurrency = DefaultMaxConcurrentEdgeTests,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(pool);
         ArgumentNullException.ThrowIfNull(testEdge);
+        if (maxConcurrency < 1)
+            throw new ArgumentOutOfRangeException(nameof(maxConcurrency));
 
         var shortlist = Shortlist(pool, health, shortlistMin, shortlistMax);
         if (shortlist.Count < 2)
             return null;
 
-        (PoolCandidate Entry, PoolCandidate Exit)? best = null;
-        var bestScore = double.NegativeInfinity;
-
+        var pairs = new List<(PoolCandidate Entry, PoolCandidate Exit)>();
         foreach (var entry in shortlist)
         {
             foreach (var exit in shortlist)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-
                 if (ReferenceEquals(entry, exit) || entry.Hop.Id == exit.Hop.Id)
                     continue;
                 if (SameEndpoint(entry.Hop, exit.Hop))
                     continue;
                 if (pinExitId is { } pinned && exit.Hop.Id != pinned)
                     continue;
+                pairs.Add((entry, exit));
+            }
+        }
 
-                var result = await testEdge(entry, exit, cancellationToken).ConfigureAwait(false);
+        if (pairs.Count == 0)
+            return null;
+
+        using var budgetCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        budgetCts.CancelAfter(timeBudget ?? DefaultAutoTwoHopBudget);
+        var ct = budgetCts.Token;
+
+        using var gate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
+        (PoolCandidate Entry, PoolCandidate Exit)? best = null;
+        var bestScore = double.NegativeInfinity;
+        var scoreLock = new object();
+
+        var tasks = pairs.Select(async pair =>
+        {
+            try
+            {
+                await gate.WaitAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            try
+            {
+                ct.ThrowIfCancellationRequested();
+                var result = await testEdge(pair.Entry, pair.Exit, ct).ConfigureAwait(false);
                 if (!result.Compatible)
-                    continue;
+                    return;
 
-                var diversityBonus = CountryDiversityBonus(entry.Country, exit.Country);
-                // Higher reliability and diversity, lower latency → higher score.
+                var diversityBonus = CountryDiversityBonus(pair.Entry.Country, pair.Exit.Country);
                 var score = (result.Reliability * 1_000_000.0)
                             - result.E2eLatencyMs
                             + diversityBonus;
 
-                if (score > bestScore)
+                lock (scoreLock)
                 {
-                    bestScore = score;
-                    best = (entry, exit);
+                    if (score > bestScore)
+                    {
+                        bestScore = score;
+                        best = pair;
+                    }
                 }
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // Budget or caller cancel — stop this pair.
+            }
+            finally
+            {
+                try { gate.Release(); } catch { /* disposed */ }
+            }
+        }).ToArray();
+
+        try
+        {
+            await Task.WhenAll(tasks).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Return best found within budget (may be null).
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+            cancellationToken.ThrowIfCancellationRequested();
 
         return best;
     }
@@ -149,7 +188,6 @@ public static class ChainSelectionPolicy
             return 0;
         if (string.Equals(a, b, StringComparison.OrdinalIgnoreCase))
             return 0;
-        // Soft bonus — enough to break ties, not enough to beat reliability/latency.
         return 50.0;
     }
 }

@@ -684,7 +684,10 @@ public sealed class ChainControlForm : Form
                     sw.Stop();
                     return new TwoHopEdgeResult(ok, Reliability: ok ? 1.0 : 0.0, E2eLatencyMs: (int)sw.ElapsedMilliseconds);
                 },
-                health: _manager.Health).ConfigureAwait(true);
+                health: _manager.Health,
+                timeBudget: TimeSpan.FromSeconds(45),
+                maxConcurrency: 4,
+                cancellationToken: CancellationToken.None).ConfigureAwait(true);
 
             if (chosen is null)
             {

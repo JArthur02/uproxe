@@ -62,6 +62,192 @@ internal static class FakeProxyServers
         }
     }
 
+    /// <summary>
+    /// Origin that reads one HTTP request (Content-Length or chunked), echoes the body,
+    /// then closes. Optionally keeps the connection open after the response for keep-alive tests.
+    /// </summary>
+    internal sealed class BodyEchoHttpServer : IAsyncDisposable
+    {
+        private readonly TcpListener _listener;
+        private readonly CancellationTokenSource _cts = new();
+        private readonly Task _loop;
+        private readonly bool _keepAlive;
+        private readonly List<string> _receivedBodies = new();
+        private readonly List<string> _receivedRequestLines = new();
+        private readonly List<string> _receivedHeaderBlocks = new();
+        private int _requestCount;
+
+        public int Port => ((IPEndPoint)_listener.LocalEndpoint).Port;
+        public int RequestCount => Volatile.Read(ref _requestCount);
+        public IReadOnlyList<string> ReceivedBodies
+        {
+            get { lock (_receivedBodies) return _receivedBodies.ToArray(); }
+        }
+        public IReadOnlyList<string> ReceivedRequestLines
+        {
+            get { lock (_receivedRequestLines) return _receivedRequestLines.ToArray(); }
+        }
+        public IReadOnlyList<string> ReceivedHeaderBlocks
+        {
+            get { lock (_receivedHeaderBlocks) return _receivedHeaderBlocks.ToArray(); }
+        }
+
+        public BodyEchoHttpServer(bool keepAlive = false)
+        {
+            _keepAlive = keepAlive;
+            _listener = new TcpListener(IPAddress.Loopback, 0);
+            _listener.Start();
+            _loop = Task.Run(AcceptLoopAsync);
+        }
+
+        private async Task AcceptLoopAsync()
+        {
+            while (!_cts.IsCancellationRequested)
+            {
+                TcpClient? client = null;
+                try
+                {
+                    client = await _listener.AcceptTcpClientAsync(_cts.Token).ConfigureAwait(false);
+                    _ = Task.Run(() => ServeAsync(client));
+                }
+                catch when (_cts.IsCancellationRequested)
+                {
+                    client?.Dispose();
+                    break;
+                }
+            }
+        }
+
+        private async Task ServeAsync(TcpClient client)
+        {
+            using var clientLifetime = client;
+            await using var stream = client.GetStream();
+            try
+            {
+                do
+                {
+                    var headerText = await ReadHeadersAsync(stream).ConfigureAwait(false);
+                    var firstLine = headerText.Split("\r\n", 2)[0];
+                    lock (_receivedRequestLines) _receivedRequestLines.Add(firstLine);
+                    lock (_receivedHeaderBlocks) _receivedHeaderBlocks.Add(headerText);
+                    Interlocked.Increment(ref _requestCount);
+
+                    var body = await ReadRequestBodyAsync(stream, headerText).ConfigureAwait(false);
+                    lock (_receivedBodies) _receivedBodies.Add(body);
+
+                    // Honor Connection: close from the proxy (always injected on forward).
+                    var requestWantsClose = headerText.Split("\r\n")
+                        .Any(l => l.StartsWith("Connection:", StringComparison.OrdinalIgnoreCase) &&
+                                  l.Contains("close", StringComparison.OrdinalIgnoreCase));
+                    var closeAfter = !_keepAlive || requestWantsClose;
+
+                    var payload = Encoding.ASCII.GetBytes(body);
+                    var conn = closeAfter ? "close" : "keep-alive";
+                    var resp = Encoding.ASCII.GetBytes(
+                        $"HTTP/1.1 200 OK\r\nContent-Length: {payload.Length}\r\nConnection: {conn}\r\n\r\n");
+                    await stream.WriteAsync(resp).ConfigureAwait(false);
+                    await stream.WriteAsync(payload).ConfigureAwait(false);
+                    await stream.FlushAsync().ConfigureAwait(false);
+
+                    if (closeAfter)
+                        return;
+                } while (!_cts.IsCancellationRequested);
+            }
+            catch
+            {
+                // client gone
+            }
+        }
+
+        private static async Task<string> ReadRequestBodyAsync(Stream stream, string headerText)
+        {
+            string? transferEncoding = null;
+            string? contentLengthHeader = null;
+            foreach (var line in headerText.Split("\r\n").Skip(1))
+            {
+                if (line.Length == 0)
+                    break;
+                var colon = line.IndexOf(':');
+                if (colon <= 0)
+                    continue;
+                var name = line[..colon].Trim();
+                var value = line[(colon + 1)..].Trim();
+                if (name.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase))
+                    transferEncoding = value;
+                else if (name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
+                    contentLengthHeader = value;
+            }
+
+            if (transferEncoding is not null &&
+                transferEncoding.Contains("chunked", StringComparison.OrdinalIgnoreCase))
+            {
+                using var ms = new MemoryStream();
+                while (true)
+                {
+                    var sizeLine = await ReadLineCrlfAsync(stream).ConfigureAwait(false);
+                    var semi = sizeLine.IndexOf(';');
+                    var sizeToken = (semi >= 0 ? sizeLine[..semi] : sizeLine).Trim();
+                    var chunkSize = long.Parse(sizeToken, System.Globalization.NumberStyles.HexNumber);
+                    if (chunkSize == 0)
+                    {
+                        // Drain trailers
+                        while (true)
+                        {
+                            var trailer = await ReadLineCrlfAsync(stream).ConfigureAwait(false);
+                            if (trailer.Length == 0)
+                                break;
+                        }
+                        break;
+                    }
+                    var chunk = new byte[chunkSize];
+                    await ReadExact(stream, chunk).ConfigureAwait(false);
+                    ms.Write(chunk);
+                    var crlf = new byte[2];
+                    await ReadExact(stream, crlf).ConfigureAwait(false);
+                }
+                return Encoding.ASCII.GetString(ms.ToArray());
+            }
+
+            if (contentLengthHeader is not null)
+            {
+                var len = int.Parse(contentLengthHeader);
+                if (len == 0)
+                    return "";
+                var buf = new byte[len];
+                await ReadExact(stream, buf).ConfigureAwait(false);
+                return Encoding.ASCII.GetString(buf);
+            }
+
+            return "";
+        }
+
+        private static async Task<string> ReadLineCrlfAsync(Stream stream)
+        {
+            using var ms = new MemoryStream();
+            var prevCr = false;
+            var b = new byte[1];
+            while (true)
+            {
+                await ReadExact(stream, b).ConfigureAwait(false);
+                if (prevCr && b[0] == (byte)'\n')
+                {
+                    var arr = ms.ToArray();
+                    return Encoding.ASCII.GetString(arr, 0, arr.Length - 1);
+                }
+                ms.WriteByte(b[0]);
+                prevCr = b[0] == (byte)'\r';
+            }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            _cts.Cancel();
+            try { _listener.Stop(); } catch { /* ignore */ }
+            try { await _loop.ConfigureAwait(false); } catch { /* ignore */ }
+            _cts.Dispose();
+        }
+    }
+
     /// <summary>Minimal SOCKS5 CONNECT relay (optional user/pass, optional forced reply code).</summary>
     internal sealed class FakeSocks5Proxy : IAsyncDisposable
     {

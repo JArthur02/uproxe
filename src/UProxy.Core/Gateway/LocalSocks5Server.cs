@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -13,11 +14,13 @@ namespace UProxy.Core.Gateway;
 public sealed class LocalSocks5Server : IAsyncDisposable
 {
     public const int DefaultPort = 8878;
+    private static readonly TimeSpan StopHandlerTimeout = TimeSpan.FromSeconds(5);
 
     private readonly IChainConnector _connector;
     private readonly IPAddress _bindAddress;
     private readonly int _requestedPort;
     private readonly TimeSpan _idleTimeout;
+    private readonly ConcurrentDictionary<Guid, Task> _activeHandlers = new();
 
     private TcpListener? _listener;
     private CancellationTokenSource? _cts;
@@ -94,6 +97,19 @@ public sealed class LocalSocks5Server : IAsyncDisposable
             catch { /* ignore */ }
         }
 
+        var handlers = _activeHandlers.Values.ToArray();
+        if (handlers.Length > 0)
+        {
+            try
+            {
+                await Task.WhenAll(handlers).WaitAsync(StopHandlerTimeout).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Timeout or handler fault — proceed with cleanup.
+            }
+        }
+
         _acceptLoop = null;
         _listener = null;
         _cts?.Dispose();
@@ -111,7 +127,14 @@ public sealed class LocalSocks5Server : IAsyncDisposable
             {
                 client = await _listener!.AcceptTcpClientAsync(ct).ConfigureAwait(false);
                 var captured = client;
-                _ = Task.Run(() => HandleClientAsync(captured, ct), CancellationToken.None);
+                var id = Guid.NewGuid();
+                var task = Task.Run(() => HandleClientAsync(captured, ct), CancellationToken.None);
+                _activeHandlers[id] = task;
+                _ = task.ContinueWith(
+                    _ => _activeHandlers.TryRemove(id, out var _),
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {

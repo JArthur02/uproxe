@@ -5,6 +5,17 @@ using UProxy.Core.Models;
 
 namespace UProxy.Core.Gateway;
 
+/// <summary>How the request body length is determined for forwarding.</summary>
+public enum RequestBodyLengthKind
+{
+    /// <summary>No request body (typical GET/HEAD/CONNECT, or no length headers).</summary>
+    NoBody,
+    /// <summary>Body length given by Content-Length.</summary>
+    ContentLength,
+    /// <summary>Body uses Transfer-Encoding: chunked framing.</summary>
+    Chunked,
+}
+
 /// <summary>Safe parsing helpers for local HTTP proxy request lines and authorities.</summary>
 public static class HttpProxyRequestParser
 {
@@ -45,6 +56,7 @@ public static class HttpProxyRequestParser
 
     public static ParsedProxyRequest Parse(ReadOnlySpan<byte> headerBytes)
     {
+        EnsureStrictCrlf(headerBytes);
         var text = Encoding.ASCII.GetString(headerBytes);
         return Parse(text);
     }
@@ -54,9 +66,9 @@ public static class HttpProxyRequestParser
         if (string.IsNullOrWhiteSpace(headerText))
             throw new HttpProxyParseException("Empty HTTP request.");
 
-        // Normalize lone LF to CRLF for split; reject bare CR injection in fields separately.
-        var normalized = headerText.Replace("\r\n", "\n").Replace('\r', '\n');
-        var lines = normalized.Split('\n', StringSplitOptions.None);
+        EnsureStrictCrlf(headerText);
+
+        var lines = headerText.Split("\r\n", StringSplitOptions.None);
         if (lines.Length == 0 || string.IsNullOrWhiteSpace(lines[0]))
             throw new HttpProxyParseException("Missing request line.");
 
@@ -81,7 +93,7 @@ public static class HttpProxyRequestParser
         {
             var line = lines[i];
             if (line.Length == 0)
-                break; // end of headers (after normalize, blank line)
+                break; // end of headers
             if (line[0] is ' ' or '\t')
                 throw new HttpProxyParseException("Obsolete line folding is not allowed.");
             var colon = line.IndexOf(':');
@@ -106,8 +118,12 @@ public static class HttpProxyRequestParser
                 throw new HttpProxyParseException("Invalid CONNECT authority.");
             originForm = "/";
         }
-        else if (target.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-                 target.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        else if (target.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new HttpProxyParseException(
+                "Absolute-form https:// URIs are not supported; use CONNECT for HTTPS.");
+        }
+        else if (target.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
         {
             wasAbsolute = true;
             if (!TryParseAbsoluteUri(target, out host, out port, out originForm))
@@ -134,8 +150,52 @@ public static class HttpProxyRequestParser
     }
 
     /// <summary>
+    /// Determines how to copy the request body when forwarding a non-CONNECT request.
+    /// Prefer chunked when Transfer-Encoding indicates chunked; otherwise Content-Length.
+    /// </summary>
+    public static RequestBodyLengthKind GetRequestBodyLengthPolicy(
+        ParsedProxyRequest request,
+        out long contentLength)
+    {
+        contentLength = 0;
+        if (request.IsConnect)
+            return RequestBodyLengthKind.NoBody;
+
+        string? transferEncoding = null;
+        string? contentLengthHeader = null;
+        foreach (var (name, value) in request.Headers)
+        {
+            if (name.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase))
+                transferEncoding = value;
+            else if (name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
+                contentLengthHeader = value;
+        }
+
+        if (transferEncoding is not null)
+        {
+            // RFC 7230: if Transfer-Encoding is present, it takes precedence over Content-Length.
+            foreach (var coding in transferEncoding.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (coding.Equals("chunked", StringComparison.OrdinalIgnoreCase))
+                    return RequestBodyLengthKind.Chunked;
+            }
+            throw new HttpProxyParseException($"Unsupported Transfer-Encoding: {transferEncoding}");
+        }
+
+        if (contentLengthHeader is not null)
+        {
+            if (!long.TryParse(contentLengthHeader, out contentLength) || contentLength < 0)
+                throw new HttpProxyParseException("Invalid Content-Length.");
+            return contentLength == 0 ? RequestBodyLengthKind.NoBody : RequestBodyLengthKind.ContentLength;
+        }
+
+        return RequestBodyLengthKind.NoBody;
+    }
+
+    /// <summary>
     /// Rebuilds an origin-form request (request line + headers + trailing CRLFCRLF) for forwarding
-    /// after a CONNECT-style dial. Strips hop-by-hop / proxy headers.
+    /// after dialing. Strips hop-by-hop / proxy headers. Keeps Transfer-Encoding and Content-Length
+    /// so chunked bodies remain intact. Always injects Connection: close (single-request only).
     /// </summary>
     public static byte[] BuildOriginFormRequest(ParsedProxyRequest request)
     {
@@ -166,6 +226,7 @@ public static class HttpProxyRequestParser
             sb.Append("Host: ").Append(FormatAuthority(request.Host, request.Port, defaultPort)).Append("\r\n");
         }
 
+        sb.Append("Connection: close\r\n");
         sb.Append("\r\n");
         return Encoding.ASCII.GetBytes(sb.ToString());
     }
@@ -278,6 +339,45 @@ public static class HttpProxyRequestParser
         return IPAddress.IsLoopback(ip) && IPAddress.IsLoopback(local.Address);
     }
 
+    /// <summary>
+    /// Rejects lone CR or lone LF (not part of CRLF). HTTP/1.x requires CRLF line endings.
+    /// </summary>
+    internal static void EnsureStrictCrlf(ReadOnlySpan<byte> bytes)
+    {
+        for (var i = 0; i < bytes.Length; i++)
+        {
+            var b = bytes[i];
+            if (b == (byte)'\n')
+            {
+                if (i == 0 || bytes[i - 1] != (byte)'\r')
+                    throw new HttpProxyParseException("HTTP requires CRLF line endings.");
+            }
+            else if (b == (byte)'\r')
+            {
+                if (i + 1 >= bytes.Length || bytes[i + 1] != (byte)'\n')
+                    throw new HttpProxyParseException("HTTP requires CRLF line endings.");
+            }
+        }
+    }
+
+    private static void EnsureStrictCrlf(string text)
+    {
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (c == '\n')
+            {
+                if (i == 0 || text[i - 1] != '\r')
+                    throw new HttpProxyParseException("HTTP requires CRLF line endings.");
+            }
+            else if (c == '\r')
+            {
+                if (i + 1 >= text.Length || text[i + 1] != '\n')
+                    throw new HttpProxyParseException("HTTP requires CRLF line endings.");
+            }
+        }
+    }
+
     private static bool IsSafeHostToken(string host)
     {
         if (string.IsNullOrWhiteSpace(host))
@@ -290,12 +390,15 @@ public static class HttpProxyRequestParser
         return true;
     }
 
+    /// <summary>
+    /// Hop-by-hop headers stripped when rebuilding origin-form for forwarding.
+    /// Transfer-Encoding is intentionally kept so chunked bodies are not corrupted.
+    /// </summary>
     private static bool IsHopByHopHeader(string name) =>
         name.Equals("Proxy-Connection", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("Proxy-Authorization", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("Connection", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("Keep-Alive", StringComparison.OrdinalIgnoreCase) ||
-        name.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("TE", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("Trailer", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("Upgrade", StringComparison.OrdinalIgnoreCase);

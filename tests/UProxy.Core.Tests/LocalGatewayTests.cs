@@ -284,6 +284,152 @@ public class LocalGatewayTests
     }
 
     [Fact]
+    public async Task HttpProxy_HttpsAbsoluteForm_Rejected()
+    {
+        var connector = new DirectTcpConnector();
+        await using var gateway = new LocalHttpProxyServer(connector, IPAddress.Loopback, port: 0,
+            idleTimeout: TimeSpan.FromSeconds(5));
+        await gateway.StartAsync();
+
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, gateway.Port);
+        await using var stream = client.GetStream();
+
+        var req = Encoding.ASCII.GetBytes(
+            "GET https://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n");
+        await stream.WriteAsync(req);
+        var text = await ReadTextAsync(stream);
+        Assert.StartsWith("HTTP/1.1 400", text);
+    }
+
+    [Fact]
+    public async Task HttpProxy_BareLfRequest_Rejected()
+    {
+        var connector = new DirectTcpConnector();
+        await using var gateway = new LocalHttpProxyServer(connector, IPAddress.Loopback, port: 0,
+            idleTimeout: TimeSpan.FromSeconds(5));
+        await gateway.StartAsync();
+
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, gateway.Port);
+        await using var stream = client.GetStream();
+
+        // Bare LF on the request line (headers still terminated with CRLFCRLF so the
+        // reader can find the delimiter). Parser must reject — not normalize LF→CRLF.
+        var req = Encoding.ASCII.GetBytes(
+            "GET http://127.0.0.1:9/ HTTP/1.1\nHost: 127.0.0.1:9\r\n\r\n");
+        await stream.WriteAsync(req);
+        var text = await ReadTextAsync(stream);
+        Assert.StartsWith("HTTP/1.1 400", text);
+    }
+
+    [Fact]
+    public async Task HttpProxy_ChunkedPost_BodyForwardedIntact()
+    {
+        await using var echo = new FakeProxyServers.BodyEchoHttpServer();
+        var connector = new DirectTcpConnector();
+        await using var gateway = new LocalHttpProxyServer(connector, IPAddress.Loopback, port: 0,
+            idleTimeout: TimeSpan.FromSeconds(10));
+        await gateway.StartAsync();
+
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, gateway.Port);
+        await using var stream = client.GetStream();
+
+        const string payload = "hello-chunked-body";
+        var chunkHex = payload.Length.ToString("x");
+        var req = Encoding.ASCII.GetBytes(
+            $"POST http://127.0.0.1:{echo.Port}/upload HTTP/1.1\r\n" +
+            $"Host: 127.0.0.1:{echo.Port}\r\n" +
+            "Transfer-Encoding: chunked\r\n" +
+            "\r\n" +
+            $"{chunkHex}\r\n" +
+            $"{payload}\r\n" +
+            "0\r\n" +
+            "\r\n");
+        await stream.WriteAsync(req);
+        await stream.FlushAsync();
+
+        var response = await ReadTextAsync(stream);
+        Assert.Contains(payload, response);
+        Assert.Equal(payload, Assert.Single(echo.ReceivedBodies));
+        Assert.Contains("Transfer-Encoding: chunked", Assert.Single(echo.ReceivedHeaderBlocks),
+            StringComparison.OrdinalIgnoreCase);
+        // Origin saw a POST (origin-form), not absolute-form.
+        Assert.StartsWith("POST /upload", echo.ReceivedRequestLines[0]);
+    }
+
+    [Fact]
+    public async Task HttpProxy_SecondRequestOnSameConnection_NotServedToWrongHost()
+    {
+        // keepAlive origins would accept a second request on the same upstream socket
+        // (the old duplex-relay bug). Proxy injects Connection: close so they close after one.
+        await using var hostA = new FakeProxyServers.BodyEchoHttpServer(keepAlive: true);
+        await using var hostB = new FakeProxyServers.BodyEchoHttpServer(keepAlive: true);
+        var dialed = new List<ChainDestination>();
+        var connector = new FuncConnector(async (dest, ct) =>
+        {
+            lock (dialed) dialed.Add(dest);
+            var direct = new DirectTcpConnector();
+            return await direct.ConnectAsync(dest, ct);
+        });
+
+        await using var gateway = new LocalHttpProxyServer(connector, IPAddress.Loopback, port: 0,
+            idleTimeout: TimeSpan.FromSeconds(10));
+        await gateway.StartAsync();
+
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, gateway.Port);
+        await using var stream = client.GetStream();
+
+        // First request → host A with body marker "from-a"
+        var reqA = Encoding.ASCII.GetBytes(
+            $"POST http://127.0.0.1:{hostA.Port}/ HTTP/1.1\r\n" +
+            $"Host: 127.0.0.1:{hostA.Port}\r\n" +
+            "Content-Length: 6\r\n" +
+            "Connection: keep-alive\r\n" +
+            "\r\n" +
+            "from-a");
+        await stream.WriteAsync(reqA);
+        await stream.FlushAsync();
+
+        var respA = await ReadTextAsync(stream);
+        Assert.Contains("from-a", respA);
+
+        // Second request on same TCP connection targeting host B.
+        // After the fix the proxy closes after the first response, so this must not
+        // be delivered to host A (wrong host) and host B must not be dialed on this conn.
+        var reqB = Encoding.ASCII.GetBytes(
+            $"POST http://127.0.0.1:{hostB.Port}/ HTTP/1.1\r\n" +
+            $"Host: 127.0.0.1:{hostB.Port}\r\n" +
+            "Content-Length: 6\r\n" +
+            "\r\n" +
+            "from-b");
+        try
+        {
+            await stream.WriteAsync(reqB);
+            await stream.FlushAsync();
+            _ = await ReadTextAsync(stream);
+        }
+        catch
+        {
+            // Connection may already be closed — expected.
+        }
+
+        // Allow a brief window for any mis-routed delivery.
+        await Task.Delay(200);
+
+        Assert.Equal(1, hostA.RequestCount);
+        Assert.Equal(0, hostB.RequestCount);
+        Assert.DoesNotContain(hostB.ReceivedBodies, b => b == "from-b");
+        lock (dialed)
+        {
+            Assert.DoesNotContain(dialed, d => d.Port == hostB.Port);
+            Assert.Contains(dialed, d => d.Port == hostA.Port);
+        }
+    }
+
+    [Fact]
     public async Task HttpProxy_OversizedHeaders_Rejected()
     {
         var connector = new DirectTcpConnector();
