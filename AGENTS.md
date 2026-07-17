@@ -3,23 +3,26 @@
 ## Cursor Cloud specific instructions
 
 ### What this repo is
-`uProxe` / **μProxy Tool** is a Windows proxy scraper & checker.
+`uProxe` / **μProxy Tool** is a Windows proxy scraper, checker, and (in v3) local proxy-chain gateway.
 
-- The `main` branch currently holds only the **legacy 1.81 release artifacts** (`tool.exe`, `Ionic.Zip.dll`, `check.ini`, `Country.mmdb`, `gate.txt`, `all.js`, `assembly.txt`) — there is no buildable source here.
-- The active development codebase is the **.NET 10 rewrite** (`μProxy Tool 2.0`), currently on branch `cursor/uproxy-net10-rewrite-b2b1` (a `UProxyTool.sln` with `src/UProxy.Core`, `src/UProxy.UI`, `tests/UProxy.Core.Tests`). Build/test/run commands below only apply where that solution is present (that branch, or `main` once the rewrite is merged).
+- **Immutable 2.0 release snapshot (binaries only):** `cursor/publish-win-x64-zip-35cc` (`dist/*.zip`). Do not develop features on that branch.
+- **Active v3 development branch:** `cursor/v3-proxychains` — reconciled from PR #15 source tip (`cursor/fix-secretscan-toolbar-clip-f851`) + current `main`.
+- Solution: `UProxyTool.sln` with `src/UProxy.Core`, `src/UProxy.UI`, `tests/UProxy.Core.Tests`.
 
 ### Toolchain
 - The **.NET 10 SDK** (`dotnet`, 10.0.3xx) is preinstalled in the VM snapshot at `/usr/share/dotnet` and symlinked to `/usr/local/bin/dotnet` (already on `PATH`). It is not reinstalled by the update script.
-- The update script runs `dotnet restore UProxyTool.sln` only when that file exists, so it is a no-op on `main` and refreshes NuGet packages on the rewrite branch.
+- The update script runs `dotnet restore UProxyTool.sln` only when that file exists.
 
-### Build / test / run (only when `UProxyTool.sln` is present)
-Standard commands are documented in the rewrite branch `README.md`. In short:
+### Build / test / run
 - Build: `dotnet build UProxyTool.sln -c Release`
-- Test: `dotnet test UProxyTool.sln -c Release` (xUnit; 18 tests covering `ProxyParser` + `AnonymityClassifier`)
-- Run UI: `dotnet run --project src/UProxy.UI -c Release`
+- Test Core (preferred on Linux CI): `dotnet test tests/UProxy.Core.Tests/UProxy.Core.Tests.csproj -c Release`
+- Avoid `dotnet test UProxyTool.sln` as the only gate — the WinForms project can hang under some runners.
+- Run UI (Windows only): `dotnet run --project src/UProxy.UI -c Release`
 
 ### Non-obvious caveats
-- `src/UProxy.UI` targets `net10.0-windows` (WinForms). It **builds** on Linux only because `Directory.Build.props` sets `EnableWindowsTargeting=true`, but the GUI **cannot run on Linux** — it requires Windows. Do not attempt to launch the UI in this Linux VM.
-- `src/UProxy.Core` and the test project target plain `net10.0` and are fully cross-platform (build, test, and run on Linux).
-- To exercise/demo core functionality on Linux without the UI, reference `UProxy.Core` from a throwaway console app and call `UProxy.Core.Parsing.ProxyParser.TryParse` and `UProxy.Core.GeoIp.MaxMindGeoIpResolver` (point it at the repo's `Country.mmdb`).
-- `check.ini`, `Ionic.Zip.dll`, `all.js`, and `assembly.txt` are legacy 1.81 files and are **not** used by the 2.0 solution.
+- `src/UProxy.UI` targets `net10.0-windows` (WinForms). It **builds** on Linux because `Directory.Build.props` sets `EnableWindowsTargeting=true`, but the GUI **cannot run on Linux**.
+- `src/UProxy.Core` and the test project target plain `net10.0` and are fully cross-platform.
+- v3 proxy chaining is **driver-free / TCP-only** for MVP: local loopback HTTP+SOCKS5 gateways + optional WinINET pointing at the local HTTP listener. Transparent all-app / UDP / WFP / WinDivert / TUN are deferred.
+- Product version stays **2.x** until MVP acceptance; then bump to **3.0.0**. Development builds may show an informational “v3 proxychains development build” label.
+- Legacy 1.81 files (`tool.exe`, `Ionic.Zip.dll`, `check.ini`, etc.) are not used by the 2.0/3.0 solution.
+- `main` also contains third-party Proxifier upload binaries (`Proxifier.exe`, `ProxifierDrv.*`, etc.) from an earlier PR; they are **not** part of the v3 feature plan unless product direction changes.
