@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using UProxy.Core.Chaining;
 using UProxy.Core.Config;
 using UProxy.Core.Models;
 
@@ -136,34 +137,22 @@ public sealed class JudgeClient
 
             await socket.ConnectAsync(new IPEndPoint(proxyIp, proxy.Port), cts.Token).ConfigureAwait(false);
 
-            var sb = new StringBuilder();
-            sb.Append("CONNECT ").Append(HttpsProbeHost).Append(':').Append(HttpsProbePort).Append(" HTTP/1.1\r\n");
-            sb.Append("Host: ").Append(HttpsProbeHost).Append(':').Append(HttpsProbePort).Append("\r\n");
-            if (!string.IsNullOrEmpty(proxy.Username))
-                sb.Append("Proxy-Authorization: ")
-                  .Append(ProxyAuth.FormatBasicHeader(proxy.Username, proxy.Password)).Append("\r\n");
-            sb.Append("User-Agent: ").Append(UserAgents.AsciiSafe(_settings.UserAgent)).Append("\r\n");
-            sb.Append("Proxy-Connection: close\r\n\r\n");
-
-            await socket.SendAsync(Encoding.ASCII.GetBytes(sb.ToString()), SocketFlags.None, cts.Token)
-                .ConfigureAwait(false);
-
-            var buffer = new byte[512];
-            var read = await socket.ReceiveAsync(buffer, SocketFlags.None, cts.Token).ConfigureAwait(false);
-            if (read <= 0)
-                return (false, FailureReason.EmptyResponse, "Proxy closed the connection during CONNECT.");
-
-            var statusLine = Encoding.ASCII.GetString(buffer, 0, read).Split("\r\n", 2)[0];
-            var code = ParseStatusCode(statusLine);
-
-            return code switch
+            await using var stream = new NetworkStream(socket, ownsSocket: false);
+            try
             {
-                200 => (true, FailureReason.None, null),
-                407 => (false, FailureReason.AuthenticationRequired, "Proxy requires authentication for CONNECT."),
-                403 or 405 or 400 => (false, FailureReason.HttpsConnectForbidden, $"CONNECT rejected: {statusLine}"),
-                502 or 503 or 504 => (false, FailureReason.TargetUnreachableThroughProxy, $"CONNECT failed: {statusLine}"),
-                _ => (false, FailureReason.TlsFailure, $"Unexpected CONNECT status: {statusLine}")
-            };
+                var (_, statusLine, _) = await HttpConnectHandshake.ConnectAsync(
+                    stream,
+                    proxy,
+                    HttpsProbeHost,
+                    HttpsProbePort,
+                    new HandshakeOptions { UserAgent = _settings.UserAgent },
+                    cts.Token).ConfigureAwait(false);
+                return HttpConnectHandshake.ClassifyStatus(200, statusLine);
+            }
+            catch (ProxyHandshakeException ex)
+            {
+                return (false, ex.Reason, ex.Message);
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -181,13 +170,6 @@ public sealed class JudgeClient
         {
             return (false, FailureReason.TlsFailure, ex.Message);
         }
-    }
-
-    private static int ParseStatusCode(string statusLine)
-    {
-        // Expected: "HTTP/1.1 200 Connection established"
-        var parts = statusLine.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
-        return parts.Length >= 2 && int.TryParse(parts[1], out var code) ? code : 0;
     }
 
     public async Task<IPAddress?> GetDirectClientIpAsync(CancellationToken ct)
