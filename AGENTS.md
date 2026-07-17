@@ -25,4 +25,4 @@
 - v3 proxy chaining is **driver-free / TCP-only** for MVP: local loopback HTTP+SOCKS5 gateways + optional WinINET pointing at the local HTTP listener. Transparent all-app / UDP / WFP / WinDivert / TUN are deferred.
 - Product version stays **2.x** until MVP acceptance; then bump to **3.0.0**. Development builds may show an informational “v3 proxychains development build” label.
 - Legacy 1.81 files (`tool.exe`, `Ionic.Zip.dll`, `check.ini`, etc.) are not used by the 2.0/3.0 solution.
-- `main` also contains third-party Proxifier upload binaries (`Proxifier.exe`, `ProxifierDrv.*`, etc.) from an earlier PR; they are **not** part of the v3 feature plan unless product direction changes.
+- Do **not** re-add third-party Proxifier binaries to this branch. They are compiled proprietary artifacts (no usable source to adapt), outside the driver-free v3 MVP. If transparent routing is ever needed later, prefer documented open-source designs (e.g. ProxiFyre / ProxyBridge / WFP docs)—not reverse-engineering commercial EXEs.
