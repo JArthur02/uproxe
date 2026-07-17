@@ -392,7 +392,8 @@ public sealed class MainForm : Form
         menu.Items.Add("Set System Proxy…", null, (_, _) => SetSystemProxyOptIn());
         menu.Items.Add("Open Proxy Chains…", null, (_, _) => OpenProxyChains());
         menu.Items.Add("Add to Fixed Chain…", null, (_, _) => OpenProxyChains(seedFixed: GetSelectedAliveResults()));
-        menu.Items.Add("Add to Smart Pool…", null, (_, _) => OpenProxyChains(seedPool: GetSelectedAliveResults()));
+        menu.Items.Add("Add elite to Smart Pool…", null, (_, _) =>
+            OpenProxyChains(seedPool: GetSelectedAliveResults().Where(r => r.IsAlive && r.Anonymity == AnonymityLevel.Elite).ToList()));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Clear results", null, (_, _) =>
         {
