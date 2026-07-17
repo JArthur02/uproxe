@@ -151,7 +151,7 @@ public static class HttpProxyRequestParser
 
     /// <summary>
     /// Determines how to copy the request body when forwarding a non-CONNECT request.
-    /// Prefer chunked when Transfer-Encoding indicates chunked; otherwise Content-Length.
+    /// Rejects ambiguous framing (Transfer-Encoding + Content-Length, duplicate/conflicting lengths).
     /// </summary>
     public static RequestBodyLengthKind GetRequestBodyLengthPolicy(
         ParsedProxyRequest request,
@@ -163,18 +163,40 @@ public static class HttpProxyRequestParser
 
         string? transferEncoding = null;
         string? contentLengthHeader = null;
+        var teCount = 0;
+        var clCount = 0;
         foreach (var (name, value) in request.Headers)
         {
             if (name.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase))
+            {
+                teCount++;
                 transferEncoding = value;
+            }
             else if (name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
-                contentLengthHeader = value;
+            {
+                clCount++;
+                if (contentLengthHeader is not null &&
+                    !string.Equals(contentLengthHeader, value.Trim(), StringComparison.Ordinal))
+                    throw new HttpProxyParseException("Conflicting Content-Length headers.");
+                contentLengthHeader = value.Trim();
+            }
         }
 
-        if (transferEncoding is not null)
+        if (teCount > 1)
+            throw new HttpProxyParseException("Duplicate Transfer-Encoding headers.");
+        if (clCount > 1)
+            throw new HttpProxyParseException("Duplicate Content-Length headers.");
+
+        var hasTe = transferEncoding is not null;
+        var hasCl = contentLengthHeader is not null;
+        if (hasTe && hasCl)
+            throw new HttpProxyParseException(
+                "Ambiguous framing: both Transfer-Encoding and Content-Length are present.");
+
+        if (hasTe)
         {
-            // RFC 7230: if Transfer-Encoding is present, it takes precedence over Content-Length.
-            foreach (var coding in transferEncoding.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+            foreach (var coding in transferEncoding!.Split(',',
+                         StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
             {
                 if (coding.Equals("chunked", StringComparison.OrdinalIgnoreCase))
                     return RequestBodyLengthKind.Chunked;
@@ -182,7 +204,7 @@ public static class HttpProxyRequestParser
             throw new HttpProxyParseException($"Unsupported Transfer-Encoding: {transferEncoding}");
         }
 
-        if (contentLengthHeader is not null)
+        if (hasCl)
         {
             if (!long.TryParse(contentLengthHeader, out contentLength) || contentLength < 0)
                 throw new HttpProxyParseException("Invalid Content-Length.");
@@ -193,12 +215,13 @@ public static class HttpProxyRequestParser
     }
 
     /// <summary>
-    /// Rebuilds an origin-form request (request line + headers + trailing CRLFCRLF) for forwarding
-    /// after dialing. Strips hop-by-hop / proxy headers. Keeps Transfer-Encoding and Content-Length
-    /// so chunked bodies remain intact. Always injects Connection: close (single-request only).
+    /// Rebuilds an origin-form request for forwarding. Strips hop-by-hop / proxy headers.
+    /// When the body is chunked, Content-Length is omitted. Always injects Connection: close.
+    /// Expect is stripped (handled by the gateway).
     /// </summary>
     public static byte[] BuildOriginFormRequest(ParsedProxyRequest request)
     {
+        var bodyKind = GetRequestBodyLengthPolicy(request, out _);
         var sb = new StringBuilder(256);
         sb.Append(request.Method).Append(' ')
           .Append(request.OriginFormTarget).Append(' ')
@@ -209,6 +232,11 @@ public static class HttpProxyRequestParser
         {
             if (IsHopByHopHeader(name))
                 continue;
+            if (name.Equals("Expect", StringComparison.OrdinalIgnoreCase))
+                continue; // gateway handles 100-continue
+            if (bodyKind == RequestBodyLengthKind.Chunked &&
+                name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
+                continue; // never forward CL with chunked
             if (name.Equals("Host", StringComparison.OrdinalIgnoreCase))
             {
                 sawHost = true;
@@ -230,6 +258,11 @@ public static class HttpProxyRequestParser
         sb.Append("\r\n");
         return Encoding.ASCII.GetBytes(sb.ToString());
     }
+
+    public static bool HasExpectContinue(ParsedProxyRequest request) =>
+        request.Headers.Any(h =>
+            h.Name.Equals("Expect", StringComparison.OrdinalIgnoreCase) &&
+            h.Value.Contains("100-continue", StringComparison.OrdinalIgnoreCase));
 
     public static bool TryParseAuthority(string authority, out string host, out int port) =>
         TryParseAuthority(authority, defaultPort: -1, out host, out port);

@@ -101,18 +101,28 @@ public sealed class ChainGatewayHost : IAsyncDisposable
 
     public async Task StopAsync()
     {
-        if (Interlocked.Exchange(ref _running, 0) == 0)
+        // Clear running first so concurrent Stop/Dispose callers share cleanup.
+        // If WinINET restore fails, _weEnabledSystemProxy stays set so a later Stop retries.
+        var wasRunning = Interlocked.Exchange(ref _running, 0);
+
+        Exception? restoreError = null;
+        try
         {
-            // Best-effort cleanup for Dispose after a failed/partial start.
             await RestoreSystemProxyIfNeededAsync().ConfigureAwait(false);
-            await StopListenersUnsafeAsync().ConfigureAwait(false);
-            Manager = null;
-            return;
+        }
+        catch (Exception ex)
+        {
+            restoreError = ex;
         }
 
-        await RestoreSystemProxyIfNeededAsync().ConfigureAwait(false);
+        // Always stop listeners even when restore fails — otherwise a thrown Restore
+        // would skip cleanup and leave sockets bound.
         await StopListenersUnsafeAsync().ConfigureAwait(false);
-        Manager = null;
+        if (wasRunning != 0)
+            Manager = null;
+
+        if (restoreError is not null)
+            throw restoreError;
     }
 
     /// <summary>Switch the active chain profile without restarting listeners or touching WinINET.</summary>
@@ -160,7 +170,8 @@ public sealed class ChainGatewayHost : IAsyncDisposable
         {
             restore = _weEnabledSystemProxy;
             win = _winProxy;
-            _weEnabledSystemProxy = false;
+            // Do not clear _weEnabledSystemProxy until Restore succeeds — otherwise a
+            // failed Restore loses retry state on the next Stop/Dispose.
         }
 
         if (!restore || win is null || !OperatingSystem.IsWindows())
@@ -170,6 +181,9 @@ public sealed class ChainGatewayHost : IAsyncDisposable
         // local gateway is worse than surfacing the error to the caller/UI.
         if (win.HasPendingRestore)
             win.Restore();
+
+        lock (_gate)
+            _weEnabledSystemProxy = false;
 
         return Task.CompletedTask;
     }

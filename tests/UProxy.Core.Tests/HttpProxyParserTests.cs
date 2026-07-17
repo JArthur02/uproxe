@@ -65,6 +65,41 @@ public class HttpProxyParserTests
     }
 
     [Fact]
+    public void GetRequestBodyLengthPolicy_RejectsAmbiguousFraming()
+    {
+        var both = HttpProxyRequestParser.Parse(
+            "POST http://example.com/ HTTP/1.1\r\nHost: example.com\r\n" +
+            "Transfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n");
+        var ex = Assert.Throws<HttpProxyParseException>(() =>
+            HttpProxyRequestParser.GetRequestBodyLengthPolicy(both, out _));
+        Assert.Contains("Ambiguous", ex.Message, StringComparison.OrdinalIgnoreCase);
+
+        var dupCl = HttpProxyRequestParser.Parse(
+            "POST http://example.com/ HTTP/1.1\r\nHost: example.com\r\n" +
+            "Content-Length: 5\r\nContent-Length: 5\r\n\r\n");
+        Assert.Throws<HttpProxyParseException>(() =>
+            HttpProxyRequestParser.GetRequestBodyLengthPolicy(dupCl, out _));
+
+        var conflictCl = HttpProxyRequestParser.Parse(
+            "POST http://example.com/ HTTP/1.1\r\nHost: example.com\r\n" +
+            "Content-Length: 5\r\nContent-Length: 9\r\n\r\n");
+        Assert.Throws<HttpProxyParseException>(() =>
+            HttpProxyRequestParser.GetRequestBodyLengthPolicy(conflictCl, out _));
+    }
+
+    [Fact]
+    public void BuildOriginForm_StripsExpect()
+    {
+        var parsed = HttpProxyRequestParser.Parse(
+            "POST http://example.com/ HTTP/1.1\r\nHost: example.com\r\n" +
+            "Content-Length: 4\r\nExpect: 100-continue\r\n\r\n");
+        Assert.True(HttpProxyRequestParser.HasExpectContinue(parsed));
+        var text = Encoding.ASCII.GetString(HttpProxyRequestParser.BuildOriginFormRequest(parsed));
+        Assert.DoesNotContain("Expect", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Content-Length: 4", text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void GetRequestBodyLengthPolicy_ChunkedAndContentLength()
     {
         var chunked = HttpProxyRequestParser.Parse(

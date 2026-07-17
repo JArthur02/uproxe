@@ -58,12 +58,6 @@ public sealed class ChainDialer
             {
                 var hop = hops[i];
 
-                // TLS to this hop (including hop 0 and intermediate TLS proxies) before handshake.
-                if (hop.Transport == ProxyTransport.Tls)
-                {
-                    stream = await WrapTlsAsync(stream, hop.Proxy.Host, ct).ConfigureAwait(false);
-                }
-
                 string nextHost;
                 int nextPort;
                 if (i + 1 < hops.Count)
@@ -86,8 +80,19 @@ public sealed class ChainDialer
 
                 try
                 {
+                    // TLS to this hop must be inside the per-hop catch so failures at hop 2–5
+                    // report FailedHopIndex correctly (not -1 / first hop).
+                    if (hop.Transport == ProxyTransport.Tls)
+                    {
+                        stream = await WrapTlsAsync(stream, hop.Proxy.Host, ct).ConfigureAwait(false);
+                    }
+
                     await HandshakeAsync(stream, hop, nextHost, nextPort, hsOptions, ct)
                         .ConfigureAwait(false);
+                }
+                catch (ChainDialException)
+                {
+                    throw;
                 }
                 catch (ProxyHandshakeException ex)
                 {
@@ -107,6 +112,16 @@ public sealed class ChainDialer
                         toEndpoint: FormatEndpoint(nextHost, nextPort),
                         reason: FailureReason.Timeout,
                         message: $"Hop {i + 1}/{hops.Count} timed out ({hop.Endpoint} → {FormatEndpoint(nextHost, nextPort)}).");
+                }
+                catch (Exception ex) when (ex is AuthenticationException or IOException)
+                {
+                    throw new ChainDialException(
+                        failedHopIndex: i,
+                        fromEndpoint: hop.Endpoint,
+                        toEndpoint: FormatEndpoint(nextHost, nextPort),
+                        reason: FailureReason.TlsFailure,
+                        message: $"Hop {i + 1}/{hops.Count} TLS to {hop.Endpoint} failed: {ex.Message}",
+                        inner: ex);
                 }
             }
 

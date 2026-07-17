@@ -12,6 +12,7 @@ public sealed class ChainManager
     private readonly ChainHealthTracker _health;
     private readonly object _gate = new();
     private readonly SemaphoreSlim _verifyLock = new(1, 1);
+    private int _halfOpenSweepRunning;
 
     private ProxyChainProfile? _profile;
     private IReadOnlyList<PoolCandidate> _pool = Array.Empty<PoolCandidate>();
@@ -74,13 +75,14 @@ public sealed class ChainManager
 
     public async Task<Stream> ConnectAsync(ChainDestination destination, CancellationToken cancellationToken)
     {
-        // Allow half-open recovery for cooled-down hops before selection.
-        await TryHalfOpenProbesAsync(cancellationToken).ConfigureAwait(false);
+        // Kick half-open recovery in the background — never block the client path
+        // behind sequential expired-cooldown probes.
+        KickHalfOpenProbes();
 
         IReadOnlyList<ProxyHop> hops;
         lock (_gate)
         {
-            if (_profile is null || _activeHops.Count == 0)
+            if (_profile is null)
                 throw new InvalidOperationException("No active chain profile.");
 
             if (_profile.Mode == ChainMode.FastFailover)
@@ -92,6 +94,10 @@ public sealed class ChainManager
             {
                 hops = _activeHops;
             }
+
+            if (hops.Count == 0)
+                throw new InvalidOperationException(
+                    "No healthy proxy available (all candidates are cooling down).");
         }
 
         try
@@ -195,6 +201,8 @@ public sealed class ChainManager
         if (best is not null)
             return new[] { best.Hop };
 
+        // Prefer any still-healthy profile hop, but never fall back to a cooling-down
+        // hop — that would bypass cooldown and keep hammering a known-bad proxy.
         if (_profile is { Hops.Count: > 0 })
         {
             foreach (var hop in _profile.Hops)
@@ -202,7 +210,6 @@ public sealed class ChainManager
                 if (_health.IsHealthy(hop))
                     return new[] { hop };
             }
-            return new[] { _profile.Hops[0] };
         }
 
         return Array.Empty<ProxyHop>();
@@ -276,7 +283,29 @@ public sealed class ChainManager
         }
     }
 
-    private async Task TryHalfOpenProbesAsync(CancellationToken cancellationToken)
+    private void KickHalfOpenProbes()
+    {
+        if (Interlocked.CompareExchange(ref _halfOpenSweepRunning, 1, 0) != 0)
+            return;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await TryHalfOpenProbesAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+                // Background recovery — never surface to the client path.
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _halfOpenSweepRunning, 0);
+            }
+        });
+    }
+
+    private async Task TryHalfOpenProbesAsync()
     {
         List<ProxyHop> candidates;
         lock (_gate)
@@ -288,27 +317,24 @@ public sealed class ChainManager
 
         foreach (var hop in candidates.DistinctBy(h => ChainHealthTracker.MakeKey(h)))
         {
-            if (!_health.IsInCooldown(hop) && _health.AllowProbe(hop))
+            if (_health.IsInCooldown(hop) || !_health.AllowProbe(hop))
+                continue;
+
+            try
             {
-                try
-                {
-                    await using var stream = await _dialer
-                        .ConnectAsync(
-                            new[] { hop },
-                            VerificationDestination,
-                            cancellationToken,
-                            TimeSpan.FromSeconds(8))
-                        .ConfigureAwait(false);
-                    _health.RecordSuccess(hop);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch
-                {
-                    _health.MarkDown(hop);
-                }
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                await using var stream = await _dialer
+                    .ConnectAsync(
+                        new[] { hop },
+                        VerificationDestination,
+                        cts.Token,
+                        TimeSpan.FromSeconds(8))
+                    .ConfigureAwait(false);
+                _health.RecordSuccess(hop);
+            }
+            catch
+            {
+                _health.MarkDown(hop);
             }
         }
     }
