@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -8,15 +9,18 @@ namespace UProxy.Core.Gateway;
 /// <summary>
 /// Loopback-only HTTP proxy gateway: CONNECT tunnels and absolute-form requests
 /// (dial host:port then forward origin-form). No TLS interception.
+/// Non-CONNECT requests are single-shot (Connection: close) — no keep-alive multiplexing.
 /// </summary>
 public sealed class LocalHttpProxyServer : IAsyncDisposable
 {
     public const int DefaultPort = 8877;
+    private static readonly TimeSpan StopHandlerTimeout = TimeSpan.FromSeconds(5);
 
     private readonly IChainConnector _connector;
     private readonly IPAddress _bindAddress;
     private readonly int _requestedPort;
     private readonly TimeSpan _idleTimeout;
+    private readonly ConcurrentDictionary<Guid, Task> _activeHandlers = new();
 
     private TcpListener? _listener;
     private CancellationTokenSource? _cts;
@@ -93,6 +97,20 @@ public sealed class LocalHttpProxyServer : IAsyncDisposable
             catch { /* ignore */ }
         }
 
+        var handlers = _activeHandlers.Values.ToArray();
+        if (handlers.Length > 0)
+        {
+            try
+            {
+                await Task.WhenAll(handlers).WaitAsync(StopHandlerTimeout).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Timeout or handler fault — proceed with cleanup.
+            }
+        }
+
+        _activeHandlers.Clear();
         _acceptLoop = null;
         _listener = null;
         _cts?.Dispose();
@@ -110,7 +128,14 @@ public sealed class LocalHttpProxyServer : IAsyncDisposable
             {
                 client = await _listener!.AcceptTcpClientAsync(ct).ConfigureAwait(false);
                 var captured = client;
-                _ = Task.Run(() => HandleClientAsync(captured, ct), CancellationToken.None);
+                var id = Guid.NewGuid();
+                var task = Task.Run(() => HandleClientAsync(captured, ct), CancellationToken.None);
+                _activeHandlers[id] = task;
+                _ = task.ContinueWith(
+                    _ => _activeHandlers.TryRemove(id, out Task? _),
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -213,18 +238,37 @@ public sealed class LocalHttpProxyServer : IAsyncDisposable
                 return;
             }
 
-            // Absolute-form (or origin-form): dial already done; write origin-form request then relay.
+            // Single-request forward: origin-form headers + body, then response until EOF, then close.
+            // Do not duplex-relay — that would allow keep-alive / pipelined requests to the wrong host.
+            RequestBodyLengthKind bodyKind;
+            long contentLength;
+            try
+            {
+                bodyKind = HttpProxyRequestParser.GetRequestBodyLengthPolicy(request, out contentLength);
+            }
+            catch (HttpProxyParseException)
+            {
+                await WriteSimpleResponseAsync(clientStream, 400, "Bad Request", ct).ConfigureAwait(false);
+                return;
+            }
+
             var forward = HttpProxyRequestParser.BuildOriginFormRequest(request);
             await remoteStream.WriteAsync(forward, ct).ConfigureAwait(false);
-            await remoteStream.FlushAsync(ct).ConfigureAwait(false);
 
+            switch (bodyKind)
             {
-                var left = clientStream;
-                var right = remoteStream;
-                clientStream = null;
-                remoteStream = null;
-                await DuplexRelay.RunAsync(left, right, _idleTimeout, serverCt).ConfigureAwait(false);
+                case RequestBodyLengthKind.ContentLength:
+                    await CopyExactAsync(clientStream, remoteStream, contentLength, ct).ConfigureAwait(false);
+                    break;
+                case RequestBodyLengthKind.Chunked:
+                    await CopyChunkedRequestBodyAsync(clientStream, remoteStream, ct).ConfigureAwait(false);
+                    break;
+                case RequestBodyLengthKind.NoBody:
+                    break;
             }
+
+            await remoteStream.FlushAsync(ct).ConfigureAwait(false);
+            await CopyUntilEofAsync(remoteStream, clientStream, ct).ConfigureAwait(false);
         }
         catch
         {
@@ -241,6 +285,109 @@ public sealed class LocalHttpProxyServer : IAsyncDisposable
                 try { await remoteStream.DisposeAsync().ConfigureAwait(false); } catch { /* ignore */ }
             }
         }
+    }
+
+    private static async Task CopyExactAsync(Stream source, Stream destination, long count, CancellationToken ct)
+    {
+        var buffer = new byte[Math.Min(81920, Math.Max(1, count))];
+        var remaining = count;
+        while (remaining > 0)
+        {
+            var toRead = (int)Math.Min(buffer.Length, remaining);
+            var n = await source.ReadAsync(buffer.AsMemory(0, toRead), ct).ConfigureAwait(false);
+            if (n == 0)
+                throw new EndOfStreamException("Unexpected EOF while copying Content-Length body.");
+            await destination.WriteAsync(buffer.AsMemory(0, n), ct).ConfigureAwait(false);
+            remaining -= n;
+        }
+    }
+
+    /// <summary>
+    /// Copies chunked transfer-coding framing (including the terminating chunk and optional trailers)
+    /// from client to origin without decoding.
+    /// </summary>
+    private static async Task CopyChunkedRequestBodyAsync(Stream source, Stream destination, CancellationToken ct)
+    {
+        while (true)
+        {
+            var sizeLine = await ReadLineCrlfAsync(source, ct).ConfigureAwait(false);
+            await WriteAsciiLineAsync(destination, sizeLine, ct).ConfigureAwait(false);
+
+            var sizeToken = sizeLine;
+            var semi = sizeToken.IndexOf(';');
+            if (semi >= 0)
+                sizeToken = sizeToken[..semi];
+            sizeToken = sizeToken.Trim();
+            if (!long.TryParse(sizeToken, System.Globalization.NumberStyles.HexNumber, null, out var chunkSize) ||
+                chunkSize < 0)
+                throw new HttpProxyParseException("Invalid chunk size.");
+
+            if (chunkSize > 0)
+            {
+                await CopyExactAsync(source, destination, chunkSize, ct).ConfigureAwait(false);
+                var afterData = await ReadLineCrlfAsync(source, ct).ConfigureAwait(false);
+                if (afterData.Length != 0)
+                    throw new HttpProxyParseException("Invalid chunk framing.");
+                await WriteAsciiLineAsync(destination, afterData, ct).ConfigureAwait(false);
+            }
+            else
+            {
+                // Trailing headers until empty line.
+                while (true)
+                {
+                    var trailer = await ReadLineCrlfAsync(source, ct).ConfigureAwait(false);
+                    await WriteAsciiLineAsync(destination, trailer, ct).ConfigureAwait(false);
+                    if (trailer.Length == 0)
+                        return;
+                }
+            }
+        }
+    }
+
+    private static async Task CopyUntilEofAsync(Stream source, Stream destination, CancellationToken ct)
+    {
+        var buffer = new byte[81920];
+        while (true)
+        {
+            var n = await source.ReadAsync(buffer.AsMemory(0, buffer.Length), ct).ConfigureAwait(false);
+            if (n == 0)
+                return;
+            await destination.WriteAsync(buffer.AsMemory(0, n), ct).ConfigureAwait(false);
+            await destination.FlushAsync(ct).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task<string> ReadLineCrlfAsync(Stream stream, CancellationToken ct)
+    {
+        using var ms = new MemoryStream(64);
+        var prevWasCr = false;
+        var buf = new byte[1];
+        while (ms.Length < 8192)
+        {
+            var n = await stream.ReadAsync(buf.AsMemory(0, 1), ct).ConfigureAwait(false);
+            if (n == 0)
+                throw new EndOfStreamException("Unexpected EOF reading chunk line.");
+            var b = buf[0];
+            if (prevWasCr)
+            {
+                if (b != (byte)'\n')
+                    throw new HttpProxyParseException("HTTP requires CRLF line endings.");
+                // Exclude the CR already written; LF not included.
+                var arr = ms.ToArray();
+                return Encoding.ASCII.GetString(arr, 0, arr.Length - 1);
+            }
+            if (b == (byte)'\n')
+                throw new HttpProxyParseException("HTTP requires CRLF line endings.");
+            ms.WriteByte(b);
+            prevWasCr = b == (byte)'\r';
+        }
+        throw new HttpProxyParseException("Chunk line too long.");
+    }
+
+    private static async Task WriteAsciiLineAsync(Stream stream, string lineWithoutCrlf, CancellationToken ct)
+    {
+        var bytes = Encoding.ASCII.GetBytes(lineWithoutCrlf + "\r\n");
+        await stream.WriteAsync(bytes, ct).ConfigureAwait(false);
     }
 
     private static async Task WriteSimpleResponseAsync(

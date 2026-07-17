@@ -4,18 +4,22 @@ namespace UProxy.Core.Chaining;
 
 /// <summary>
 /// High-level chain orchestration: active profile, dialing, health feedback, validation.
-/// Thread-safe.
+/// Thread-safe. FastFailover runs verification probes and cooldown so dead hops are replaced.
 /// </summary>
 public sealed class ChainManager
 {
     private readonly ChainDialer _dialer;
     private readonly ChainHealthTracker _health;
     private readonly object _gate = new();
+    private readonly SemaphoreSlim _verifyLock = new(1, 1);
 
     private ProxyChainProfile? _profile;
     private IReadOnlyList<PoolCandidate> _pool = Array.Empty<PoolCandidate>();
     private IReadOnlyList<ProxyHop> _activeHops = Array.Empty<ProxyHop>();
     private ChainRuntimeState _state = ChainRuntimeState.Stopped;
+
+    /// <summary>Destination used for confirmation probes after repeated proxy failures.</summary>
+    public ChainDestination VerificationDestination { get; set; } = new("www.google.com", 443);
 
     public ChainManager(ChainDialer? dialer = null, ChainHealthTracker? health = null)
     {
@@ -36,7 +40,6 @@ public sealed class ChainManager
         get { lock (_gate) return _profile; }
     }
 
-    /// <summary>Atomically replace the active profile (and optional FastFailover pool).</summary>
     public void SwitchProfile(ProxyChainProfile profile, IReadOnlyList<PoolCandidate>? pool = null)
     {
         ArgumentNullException.ThrowIfNull(profile);
@@ -63,7 +66,6 @@ public sealed class ChainManager
         }
     }
 
-    /// <summary>Ordered hops currently used for dialing (Strict order is preserved).</summary>
     public IReadOnlyList<ProxyHop> GetActiveHops()
     {
         lock (_gate)
@@ -72,6 +74,9 @@ public sealed class ChainManager
 
     public async Task<Stream> ConnectAsync(ChainDestination destination, CancellationToken cancellationToken)
     {
+        // Allow half-open recovery for cooled-down hops before selection.
+        await TryHalfOpenProbesAsync(cancellationToken).ConfigureAwait(false);
+
         IReadOnlyList<ProxyHop> hops;
         lock (_gate)
         {
@@ -80,7 +85,6 @@ public sealed class ChainManager
 
             if (_profile.Mode == ChainMode.FastFailover)
             {
-                // Re-select best hop each connect so health changes take effect.
                 hops = ResolveFastFailoverHopsUnlocked();
                 _activeHops = hops;
             }
@@ -108,18 +112,11 @@ public sealed class ChainManager
         }
         catch (ChainDialException ex)
         {
-            RecordHopFailure(hops, ex);
-            lock (_gate)
-            {
-                if (_state == ChainRuntimeState.Healthy)
-                    _state = ChainRuntimeState.Degraded;
-            }
-
+            await HandleDialFailureAsync(hops, ex, cancellationToken).ConfigureAwait(false);
             throw;
         }
     }
 
-    /// <summary>Dial <paramref name="from"/> → <paramref name="to"/> → test destination.</summary>
     public async Task<bool> ValidateEdgeAsync(
         ProxyHop from,
         ProxyHop to,
@@ -142,7 +139,7 @@ public sealed class ChainManager
         }
         catch (ChainDialException ex)
         {
-            RecordHopFailure(hops, ex);
+            await HandleDialFailureAsync(hops, ex, cancellationToken).ConfigureAwait(false);
             return false;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -155,7 +152,6 @@ public sealed class ChainManager
         }
     }
 
-    /// <summary>Dial the active chain to a test destination.</summary>
     public async Task<bool> ValidateChainAsync(
         ChainDestination testDestination,
         CancellationToken cancellationToken,
@@ -180,7 +176,7 @@ public sealed class ChainManager
         }
         catch (ChainDialException ex)
         {
-            RecordHopFailure(hops, ex);
+            await HandleDialFailureAsync(hops, ex, cancellationToken).ConfigureAwait(false);
             return false;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -199,14 +195,23 @@ public sealed class ChainManager
         if (best is not null)
             return new[] { best.Hop };
 
-        // Fall back to first profile hop if pool empty / all unhealthy.
         if (_profile is { Hops.Count: > 0 })
+        {
+            foreach (var hop in _profile.Hops)
+            {
+                if (_health.IsHealthy(hop))
+                    return new[] { hop };
+            }
             return new[] { _profile.Hops[0] };
+        }
 
         return Array.Empty<ProxyHop>();
     }
 
-    private void RecordHopFailure(IReadOnlyList<ProxyHop> hops, ChainDialException ex)
+    private async Task HandleDialFailureAsync(
+        IReadOnlyList<ProxyHop> hops,
+        ChainDialException ex,
+        CancellationToken cancellationToken)
     {
         if (!ChainHealthTracker.IsProxyAttributable(ex.Reason))
             return;
@@ -217,6 +222,94 @@ public sealed class ChainManager
         if (index >= hops.Count)
             return;
 
-        _health.RecordProxyFailure(hops[index], ex.Reason);
+        var hop = hops[index];
+        _health.RecordProxyFailure(hop, ex.Reason);
+
+        lock (_gate)
+        {
+            if (_state == ChainRuntimeState.Healthy)
+                _state = ChainRuntimeState.Degraded;
+        }
+
+        if (_health.NeedsVerification(hop))
+            await RunVerificationAsync(hop, cancellationToken).ConfigureAwait(false);
+
+        // FastFailover: drop dead hop from active selection immediately.
+        lock (_gate)
+        {
+            if (_profile?.Mode == ChainMode.FastFailover)
+                _activeHops = ResolveFastFailoverHopsUnlocked();
+        }
+    }
+
+    private async Task RunVerificationAsync(ProxyHop hop, CancellationToken cancellationToken)
+    {
+        await _verifyLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (!_health.NeedsVerification(hop))
+                return;
+
+            try
+            {
+                await using var stream = await _dialer
+                    .ConnectAsync(
+                        new[] { hop },
+                        VerificationDestination,
+                        cancellationToken,
+                        TimeSpan.FromSeconds(10))
+                    .ConfigureAwait(false);
+                _health.RecordSuccess(hop);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+                _health.MarkDown(hop);
+            }
+        }
+        finally
+        {
+            _verifyLock.Release();
+        }
+    }
+
+    private async Task TryHalfOpenProbesAsync(CancellationToken cancellationToken)
+    {
+        List<ProxyHop> candidates;
+        lock (_gate)
+        {
+            candidates = _pool.Select(c => c.Hop).ToList();
+            if (_profile is not null)
+                candidates.AddRange(_profile.Hops);
+        }
+
+        foreach (var hop in candidates.DistinctBy(h => ChainHealthTracker.MakeKey(h)))
+        {
+            if (!_health.IsInCooldown(hop) && _health.AllowProbe(hop))
+            {
+                try
+                {
+                    await using var stream = await _dialer
+                        .ConnectAsync(
+                            new[] { hop },
+                            VerificationDestination,
+                            cancellationToken,
+                            TimeSpan.FromSeconds(8))
+                        .ConfigureAwait(false);
+                    _health.RecordSuccess(hop);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch
+                {
+                    _health.MarkDown(hop);
+                }
+            }
+        }
     }
 }

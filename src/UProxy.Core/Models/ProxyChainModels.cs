@@ -69,7 +69,9 @@ public sealed record ProxyHop(
 
     public static ProxyKind InferKind(ProxyProtocol protocol) => protocol switch
     {
-        ProxyProtocol.Socks4 or ProxyProtocol.Socks4And5 => ProxyKind.Socks4,
+        ProxyProtocol.Socks4 => ProxyKind.Socks4,
+        // Prefer SOCKS5 when the checker confirmed both — SOCKS5 is the more capable hop.
+        ProxyProtocol.Socks4And5 => ProxyKind.Socks5,
         ProxyProtocol.Socks5 => ProxyKind.Socks5,
         ProxyProtocol.Http or ProxyProtocol.Https => ProxyKind.Http,
         _ => ProxyKind.Socks5
