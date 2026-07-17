@@ -62,6 +62,30 @@ Settings are stored under `%LocalAppData%\uProxyTool\settings.json`.
 - **Embedded auth**: HTTP Basic (`Proxy-Authorization`), SOCKS5 user/pass, SOCKS4 userid; NTLM is detected on 407 but not sent by default (privacy).
 - **User-Agent presets**: selectable in Settings (μProxy default, Chrome, Firefox, Internet Explorer 11) for judges/targets that block non-browser agents.
 
+## Proxychains-ng export
+
+Choose **Export**, select the desired filters, and save as **Proxychains config
+(`*.conf`)**. The generated proxychains-ng 4.x configuration uses
+`dynamic_chain` (so an unavailable entry can be skipped), enables proxied DNS,
+and includes the checked proxies in `[ProxyList]`. HTTPS-capable HTTP proxies are
+written as `http`, as proxychains uses HTTP `CONNECT`; endpoints supporting both
+SOCKS4 and SOCKS5 are written as `socks5`.
+
+Proxy credentials remain excluded by default, like the other export formats.
+Select **Include credentials** to opt in. Proxychains configuration tokens cannot
+represent empty passwords or usernames/passwords containing whitespace; the
+exporter rejects those rather than producing a broken config.
+
+On Linux, BSD, or macOS, pass the file explicitly and verify the observed IP
+before relying on it:
+
+```bash
+proxychains4 -f proxies.conf curl https://ifconfig.me
+```
+
+Proxychains only intercepts supported TCP calls in dynamically linked programs;
+it does not proxy UDP or ICMP traffic.
+
 
 ## Secret scanning (TruffleHog)
 
