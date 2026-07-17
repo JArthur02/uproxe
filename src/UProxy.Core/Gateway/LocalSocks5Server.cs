@@ -53,10 +53,14 @@ public sealed class LocalSocks5Server : IAsyncDisposable
 
     public Task StartAsync(CancellationToken cancellationToken = default)
     {
+        // Do not claim the single-start guard when the caller has already cancelled.
+        // Otherwise every later start attempt would incorrectly report that the
+        // gateway is already running even though no listener was created.
+        cancellationToken.ThrowIfCancellationRequested();
+
         if (Interlocked.CompareExchange(ref _started, 1, 0) != 0)
             throw new InvalidOperationException("SOCKS5 gateway is already running.");
 
-        cancellationToken.ThrowIfCancellationRequested();
         _cts = new CancellationTokenSource();
         try
         {

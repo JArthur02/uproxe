@@ -159,6 +159,38 @@ public class LocalGatewayTests
     }
 
     [Fact]
+    public async Task Socks5_CancelledStart_DoesNotPreventLaterStart()
+    {
+        await using var gateway = new LocalSocks5Server(
+            new DirectTcpConnector(), IPAddress.Loopback, port: 0);
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => gateway.StartAsync(cancelled.Token));
+
+        Assert.False(gateway.IsRunning);
+        await gateway.StartAsync();
+        Assert.True(gateway.IsRunning);
+    }
+
+    [Fact]
+    public async Task Http_CancelledStart_DoesNotPreventLaterStart()
+    {
+        await using var gateway = new LocalHttpProxyServer(
+            new DirectTcpConnector(), IPAddress.Loopback, port: 0);
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => gateway.StartAsync(cancelled.Token));
+
+        Assert.False(gateway.IsRunning);
+        await gateway.StartAsync();
+        Assert.True(gateway.IsRunning);
+    }
+
+    [Fact]
     public async Task Socks5_BindAndUdpAssociate_Rejected()
     {
         var connector = new DirectTcpConnector();
