@@ -28,9 +28,7 @@ public class HandshakeProtocolTests
 
         var req = Encoding.ASCII.GetBytes($"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
         await stream.WriteAsync(req);
-        var buf = new byte[512];
-        var n = await stream.ReadAsync(buf);
-        var text = Encoding.ASCII.GetString(buf, 0, n);
+        var text = await ReadUntilContainsAsync(stream, "socks5-ok");
         Assert.Contains("200", text);
         Assert.Contains("socks5-ok", text);
     }
@@ -102,9 +100,7 @@ public class HandshakeProtocolTests
 
         var req = Encoding.ASCII.GetBytes("GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
         await stream.WriteAsync(req);
-        var buf = new byte[256];
-        var n = await stream.ReadAsync(buf);
-        Assert.Contains("socks4-ok", Encoding.ASCII.GetString(buf, 0, n));
+        Assert.Contains("socks4-ok", await ReadUntilContainsAsync(stream, "socks4-ok"));
     }
 
     [Fact]
@@ -155,5 +151,24 @@ public class HandshakeProtocolTests
                 "127.0.0.1",
                 80,
                 ct: cts.Token));
+    }
+
+    private static async Task<string> ReadUntilContainsAsync(Stream stream, string needle)
+    {
+        var buf = new byte[256];
+        using var ms = new MemoryStream();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        while (true)
+        {
+            var n = await stream.ReadAsync(buf.AsMemory(), cts.Token);
+            if (n == 0)
+                break;
+            ms.Write(buf, 0, n);
+            var text = Encoding.ASCII.GetString(ms.ToArray());
+            if (text.Contains(needle, StringComparison.Ordinal))
+                return text;
+        }
+
+        return Encoding.ASCII.GetString(ms.ToArray());
     }
 }

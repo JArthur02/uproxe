@@ -39,6 +39,10 @@ public sealed class ChainGatewayHost : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(manager);
+        // Match LocalHttp/Socks: reject a pre-cancelled token before claiming the
+        // single-start guard so callers can retry StartAsync after cancellation.
+        cancellationToken.ThrowIfCancellationRequested();
+
         if (Interlocked.CompareExchange(ref _running, 1, 0) != 0)
             throw new InvalidOperationException("Chain gateway host is already running.");
 
@@ -49,8 +53,6 @@ public sealed class ChainGatewayHost : IAsyncDisposable
 
         try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
             _http = new LocalHttpProxyServer(connector, IPAddress.Loopback, httpPort);
             try
             {

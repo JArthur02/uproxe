@@ -183,6 +183,34 @@ public class ChainGatewayHostTests
     }
 
     [Fact]
+    public async Task CancelledStart_DoesNotPreventLaterStart()
+    {
+        await using var hop = new FakeProxyServers.FakeSocks5Proxy();
+        var manager = CreateManager(hop.Port);
+        await using var host = new ChainGatewayHost
+        {
+            HttpPort = LoopbackPortFinder.FindFreePort(),
+            SocksPort = LoopbackPortFinder.FindFreePort()
+        };
+        while (host.SocksPort == host.HttpPort)
+            host.SocksPort = LoopbackPortFinder.FindFreePort();
+
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            host.StartAsync(manager, enableSystemProxy: false, cancelled.Token));
+
+        Assert.False(host.IsRunning);
+        Assert.Null(host.Manager);
+
+        await host.StartAsync(manager, enableSystemProxy: false);
+        Assert.True(host.IsRunning);
+        Assert.Same(manager, host.Manager);
+        await host.StopAsync();
+    }
+
+    [Fact]
     public async Task DoubleStop_AndDispose_AreSafe()
     {
         await using var hop = new FakeProxyServers.FakeSocks5Proxy();
