@@ -113,7 +113,7 @@ public sealed class ChainControlForm : Form
 
         if (seededPool)
         {
-            foreach (var r in seedPool!)
+            foreach (var r in seedPool!.Where(IsEliteAlive))
                 TryAddPool(ResultToCandidate(r));
         }
 
@@ -181,7 +181,7 @@ public sealed class ChainControlForm : Form
 
         var note = new Label
         {
-            Text = "TCP-only local gateway (HTTP + SOCKS5). Click Start after loading hops — WinINET (optional) points at 127.0.0.1 only.",
+            Text = "TCP-only local gateway (HTTP + SOCKS5). Smart Pool uses elite proxies only. WinINET (optional) points at 127.0.0.1.",
             AutoSize = true,
             ForeColor = Color.FromArgb(90, 90, 90),
             Margin = new Padding(0, 8, 0, 0)
@@ -256,8 +256,8 @@ public sealed class ChainControlForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         var side = BuildSidePanel();
-        var importAlive = MakeSideButton("Import from session");
-        var paste = MakeSideButton("Paste");
+        var importAlive = MakeSideButton("Import elite from session");
+        var paste = MakeSideButton("Paste elite");
         var remove = MakeSideButton("Remove");
         var save = MakeSideButton("Save pool");
         _btnStartFailover = MakeSideButton("Start Fast Failover");
@@ -421,7 +421,7 @@ public sealed class ChainControlForm : Form
         if (!running && canHeaderStart)
         {
             _lblHint.Text = PreferPoolTab()
-                ? "Pool loaded — click Start to run Fast Failover."
+                ? "Elite pool loaded — click Start to run Fast Failover."
                 : "Hops loaded — click Start to run the local gateway.";
             _lblHint.Visible = true;
         }
@@ -433,7 +433,7 @@ public sealed class ChainControlForm : Form
         else
         {
             _lblHint.Text = PreferPoolTab()
-                ? "Import or paste pool candidates, then click Start."
+                ? "Smart Pool uses elite proxies only — import or paste elites, then Start."
                 : "Add hops on Fixed Chain, then click Start.";
             _lblHint.Visible = true;
         }
@@ -509,8 +509,14 @@ public sealed class ChainControlForm : Form
                     if (pool is not null)
                     {
                         _poolItems.Clear();
+                        var eliteByEndpoint = EliteAliveByEndpoint();
                         foreach (var c in pool)
-                            _poolItems.Add(new PoolItem(c));
+                        {
+                            var key = EndpointKey(c.Hop);
+                            if (eliteByEndpoint.TryGetValue(key, out var checkedElite))
+                                TryAddPool(ResultToCandidate(checkedElite));
+                            // Skip saved candidates that are not currently elite-alive.
+                        }
                     }
                 }
 
@@ -600,18 +606,21 @@ public sealed class ChainControlForm : Form
 
     private void ImportPoolFromSession()
     {
-        var alive = _getAliveResults().Where(r => r.IsAlive).ToList();
-        if (alive.Count == 0)
+        var elite = _getAliveResults().Where(IsEliteAlive).ToList();
+        if (elite.Count == 0)
         {
-            MessageBox.Show(this, "No alive proxies in the current session.", "Proxy Chains",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this,
+                "No elite alive proxies in the current session.\n\nSmart Pool only accepts elite proxies.",
+                "Proxy Chains",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
             return;
         }
 
-        using var dlg = new PickProxiesDialog(alive, "Add to Smart Pool");
+        using var dlg = new PickProxiesDialog(elite, "Add elite proxies to Smart Pool");
         if (dlg.ShowDialog(this) != DialogResult.OK)
             return;
-        foreach (var r in dlg.Selected)
+        foreach (var r in dlg.Selected.Where(IsEliteAlive))
             TryAddPool(ResultToCandidate(r));
     }
 
@@ -626,8 +635,44 @@ public sealed class ChainControlForm : Form
             return;
         }
 
+        var eliteByEndpoint = EliteAliveByEndpoint();
+        var added = 0;
+        var skipped = 0;
         foreach (var p in parsed)
-            TryAddPool(new PoolCandidate(ProxyHop.FromParsed(p)));
+        {
+            var hop = ProxyHop.FromParsed(p);
+            if (!eliteByEndpoint.TryGetValue(EndpointKey(hop), out var elite))
+            {
+                skipped++;
+                continue;
+            }
+
+            var before = _poolItems.Count;
+            TryAddPool(ResultToCandidate(elite));
+            if (_poolItems.Count > before)
+                added++;
+            else
+                skipped++;
+        }
+
+        if (added == 0)
+        {
+            MessageBox.Show(this,
+                skipped > 0
+                    ? "Clipboard proxies were skipped — Smart Pool only accepts elite alive proxies from the current session."
+                    : "No elite proxies found to add.",
+                "Proxy Chains",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+        else if (skipped > 0)
+        {
+            MessageBox.Show(this,
+                $"Added {added} elite proxy(s). Skipped {skipped} non-elite or unknown.",
+                "Proxy Chains",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
     }
 
     private void RemoveSelectedPool()
@@ -642,6 +687,34 @@ public sealed class ChainControlForm : Form
             return;
         _poolItems.Add(new PoolItem(candidate));
     }
+
+    private void PrunePoolToEliteAlive()
+    {
+        var elite = EliteAliveByEndpoint();
+        for (var i = _poolItems.Count - 1; i >= 0; i--)
+        {
+            if (!elite.ContainsKey(EndpointKey(_poolItems[i].Candidate.Hop)))
+                _poolItems.RemoveAt(i);
+        }
+    }
+
+    private static bool IsEliteAlive(ProxyCheckResult r) =>
+        r.IsAlive && r.Anonymity == AnonymityLevel.Elite;
+
+    private Dictionary<string, ProxyCheckResult> EliteAliveByEndpoint()
+    {
+        var map = new Dictionary<string, ProxyCheckResult>(StringComparer.OrdinalIgnoreCase);
+        foreach (var r in _getAliveResults().Where(IsEliteAlive))
+        {
+            var key = EndpointKey(ResultToHop(r));
+            map.TryAdd(key, r);
+        }
+
+        return map;
+    }
+
+    private static string EndpointKey(ProxyHop hop) =>
+        $"{hop.Proxy.Host.Trim().TrimStart('[').TrimEnd(']').ToLowerInvariant()}:{hop.Proxy.Port}";
 
     private void SaveFixedProfile()
     {
@@ -780,10 +853,14 @@ public sealed class ChainControlForm : Form
 
     private async Task StartFastFailoverAsync()
     {
+        PrunePoolToEliteAlive();
         if (_poolItems.Count == 0)
         {
-            MessageBox.Show(this, "Import or paste pool candidates first.", "Proxy Chains",
-                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(this,
+                "Import elite alive proxies first.\n\nSmart Pool only uses elite proxies from the current session.",
+                "Proxy Chains",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
             return;
         }
 
@@ -820,10 +897,14 @@ public sealed class ChainControlForm : Form
 
     private async Task StartPrivacyTwoHopAsync()
     {
+        PrunePoolToEliteAlive();
         if (_poolItems.Count < 2)
         {
-            MessageBox.Show(this, "Need at least two pool candidates for Privacy 2-hop.", "Proxy Chains",
-                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show(this,
+                "Need at least two elite pool candidates for Privacy 2-hop.",
+                "Proxy Chains",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
             return;
         }
 
