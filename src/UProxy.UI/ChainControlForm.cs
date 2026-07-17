@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Net.Http;
 using UProxy.Core.Chaining;
+using UProxy.Core.Checking;
 using UProxy.Core.Config;
 using UProxy.Core.Gateway;
 using UProxy.Core.Models;
@@ -18,7 +19,8 @@ public sealed class ChainControlForm : Form
 {
     private readonly AppSettings _settings;
     private readonly string _settingsPath;
-    private readonly Func<IReadOnlyList<ProxyCheckResult>> _getAliveResults;
+    private readonly Func<IReadOnlyList<ProxyCheckResult>> _getSessionResults;
+    private readonly Action<ProxyCheckResult>? _onCheckResult;
     private readonly ChainGatewayHost _gateway;
     private readonly ChainManager _manager;
     private readonly RoutingUiState _routing;
@@ -27,7 +29,12 @@ public sealed class ChainControlForm : Form
     private readonly ChainProfileStore _profiles;
     private readonly PoolStore _pools;
     private readonly WindowsProxyManager _winProxy = new();
+    private readonly Dictionary<string, ProxyCheckResult> _checkOverrides =
+        new(StringComparer.OrdinalIgnoreCase);
     private bool _busy;
+    private bool _fixedDirty;
+    private bool _poolDirty;
+    private bool _suppressDirty;
 
     private readonly Label _lblMode = new() { AutoSize = true };
     private readonly Label _lblHttp = new() { AutoSize = true };
@@ -94,7 +101,7 @@ public sealed class ChainControlForm : Form
 
     public ChainControlForm(
         AppSettings settings,
-        Func<IReadOnlyList<ProxyCheckResult>> getAliveResults,
+        Func<IReadOnlyList<ProxyCheckResult>> getSessionResults,
         ChainGatewayHost gateway,
         ChainManager manager,
         RoutingUiState routing,
@@ -104,10 +111,12 @@ public sealed class ChainControlForm : Form
         ProtectedCredentialStore? credentials = null,
         string? settingsPath = null,
         IReadOnlyList<ProxyCheckResult>? seedFixed = null,
-        IReadOnlyList<ProxyCheckResult>? seedPool = null)
+        IReadOnlyList<ProxyCheckResult>? seedPool = null,
+        Action<ProxyCheckResult>? onCheckResult = null)
     {
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
-        _getAliveResults = getAliveResults ?? throw new ArgumentNullException(nameof(getAliveResults));
+        _getSessionResults = getSessionResults ?? throw new ArgumentNullException(nameof(getSessionResults));
+        _onCheckResult = onCheckResult;
         _gateway = gateway ?? throw new ArgumentNullException(nameof(gateway));
         _manager = manager ?? throw new ArgumentNullException(nameof(manager));
         _routing = routing ?? throw new ArgumentNullException(nameof(routing));
@@ -158,6 +167,17 @@ public sealed class ChainControlForm : Form
         if (!seededFixed && !seededPool)
             TryLoadActiveProfile();
 
+        _suppressDirty = true;
+        try
+        {
+            ClearFixedDirty();
+            ClearPoolDirty();
+        }
+        finally
+        {
+            _suppressDirty = false;
+        }
+
         RefreshStatus();
     }
 
@@ -166,7 +186,7 @@ public sealed class ChainControlForm : Form
     /// </summary>
     public ChainControlForm(
         AppSettings settings,
-        Func<IReadOnlyList<ProxyCheckResult>> getAliveResults,
+        Func<IReadOnlyList<ProxyCheckResult>> getSessionResults,
         ChainGatewayHost gateway,
         ChainManager manager,
         AppDataLayout? layout = null,
@@ -175,10 +195,11 @@ public sealed class ChainControlForm : Form
         ProtectedCredentialStore? credentials = null,
         string? settingsPath = null,
         IReadOnlyList<ProxyCheckResult>? seedFixed = null,
-        IReadOnlyList<ProxyCheckResult>? seedPool = null)
+        IReadOnlyList<ProxyCheckResult>? seedPool = null,
+        Action<ProxyCheckResult>? onCheckResult = null)
         : this(
             settings,
-            getAliveResults,
+            getSessionResults,
             gateway,
             manager,
             new RoutingUiState(),
@@ -188,7 +209,8 @@ public sealed class ChainControlForm : Form
             credentials,
             settingsPath,
             seedFixed,
-            seedPool)
+            seedPool,
+            onCheckResult)
     {
     }
 
@@ -371,6 +393,7 @@ public sealed class ChainControlForm : Form
         var importAlive = MakeSideButton("Import from session");
         var paste = MakeSideButton("Paste candidates");
         var remove = MakeSideButton("Remove");
+        var recheck = MakeSideButton("Recheck pool");
         var refreshBadges = MakeSideButton("Refresh badges");
         var removeFailed = MakeSideButton("Remove failed");
         var save = MakeSideButton("Save pool");
@@ -378,11 +401,12 @@ public sealed class ChainControlForm : Form
         importAlive.Click += (_, _) => ImportPoolFromSession();
         paste.Click += (_, _) => PastePool();
         remove.Click += (_, _) => RemoveSelectedPool();
+        recheck.Click += async (_, _) => await RecheckPoolAsync();
         refreshBadges.Click += (_, _) => RefreshPoolBadges();
         removeFailed.Click += (_, _) => RemoveFailedPoolItems();
         save.Click += (_, _) => SavePool();
 
-        side.Controls.AddRange([importAlive, paste, remove, refreshBadges, removeFailed, save]);
+        side.Controls.AddRange([importAlive, paste, remove, recheck, refreshBadges, removeFailed, save]);
 
         _poolEligibility.Items.AddRange([
             "Elite only (default)",
@@ -554,10 +578,28 @@ public sealed class ChainControlForm : Form
         _btnCopyHttp.Click += (_, _) => CopyGatewayEndpoint(_gateway.HttpPort, "HTTP");
         _btnCopySocks.Click += (_, _) => CopyGatewayEndpoint(_gateway.SocksPort, "SOCKS");
         _tabs.SelectedIndexChanged += (_, _) => RefreshStatus();
-        _fixedItems.ListChanged += (_, _) => RefreshStatus();
-        _poolItems.ListChanged += (_, _) => RefreshStatus();
-        _poolEligibility.SelectedIndexChanged += (_, _) => RefreshStatus();
-        _poolMode.SelectedIndexChanged += (_, _) => RefreshStatus();
+        _fixedItems.ListChanged += (_, _) =>
+        {
+            MarkFixedDirty();
+            RefreshStatus();
+        };
+        _poolItems.ListChanged += (_, _) =>
+        {
+            MarkPoolDirty();
+            RefreshStatus();
+        };
+        _fixedName.TextChanged += (_, _) => MarkFixedDirty();
+        _poolName.TextChanged += (_, _) => MarkPoolDirty();
+        _poolEligibility.SelectedIndexChanged += (_, _) =>
+        {
+            MarkPoolDirty();
+            RefreshStatus();
+        };
+        _poolMode.SelectedIndexChanged += (_, _) =>
+        {
+            MarkPoolDirty();
+            RefreshStatus();
+        };
         _routing.Changed += () =>
         {
             if (IsHandleCreated && !IsDisposed)
@@ -613,14 +655,8 @@ public sealed class ChainControlForm : Form
         if (!_gateway.IsRunning)
             return;
 
-        var result = MessageBox.Show(this,
-            "The local gateway is still running.\n\n" +
-            "Yes — Keep running and close this window\n" +
-            "No — Stop the gateway and close\n" +
-            "Cancel — Stay on this window",
-            "Proxy Chains",
-            MessageBoxButtons.YesNoCancel,
-            MessageBoxIcon.Question);
+        using var dlg = new GatewayCloseDialog();
+        var result = dlg.ShowDialog(this);
 
         if (result == DialogResult.Cancel)
         {
@@ -641,7 +677,7 @@ public sealed class ChainControlForm : Form
                 e.Cancel = true;
             }
         }
-        // Yes = keep gateway running while closing the dialog.
+        // Yes = Keep running
     }
 
     private void CopyGatewayEndpoint(int port, string label)
@@ -671,6 +707,42 @@ public sealed class ChainControlForm : Form
     {
         _lblBanner.Visible = false;
         _lblBanner.Text = "";
+    }
+
+    private void MarkFixedDirty()
+    {
+        if (_suppressDirty)
+            return;
+        _fixedDirty = true;
+        UpdateDirtyTabs();
+    }
+
+    private void MarkPoolDirty()
+    {
+        if (_suppressDirty)
+            return;
+        _poolDirty = true;
+        UpdateDirtyTabs();
+    }
+
+    private void ClearFixedDirty()
+    {
+        _fixedDirty = false;
+        UpdateDirtyTabs();
+    }
+
+    private void ClearPoolDirty()
+    {
+        _poolDirty = false;
+        UpdateDirtyTabs();
+    }
+
+    private void UpdateDirtyTabs()
+    {
+        if (_tabs.TabPages.Count > 0)
+            _tabs.TabPages[0].Text = _fixedDirty ? "Fixed Chain *" : "Fixed Chain";
+        if (_tabs.TabPages.Count > 1)
+            _tabs.TabPages[1].Text = _poolDirty ? "Smart Pool *" : "Smart Pool";
     }
 
     private void SetBusy(bool busy)
@@ -876,21 +948,29 @@ public sealed class ChainControlForm : Form
                 if (!match)
                     continue;
 
-                _fixedName.Text = p.Name;
-                _fixedItems.Clear();
-                foreach (var h in p.Hops)
-                    _fixedItems.Add(new HopItem(h));
-
-                if (!string.IsNullOrWhiteSpace(p.CandidatePoolId))
+                _suppressDirty = true;
+                try
                 {
-                    _poolName.Text = p.CandidatePoolId;
-                    var pool = _pools.Load(p.CandidatePoolId);
-                    if (pool is not null)
+                    _fixedName.Text = p.Name;
+                    _fixedItems.Clear();
+                    foreach (var h in p.Hops)
+                        _fixedItems.Add(new HopItem(h));
+
+                    if (!string.IsNullOrWhiteSpace(p.CandidatePoolId))
                     {
-                        _poolItems.Clear();
-                        foreach (var c in pool)
-                            TryAddPool(c);
+                        _poolName.Text = p.CandidatePoolId;
+                        var pool = _pools.Load(p.CandidatePoolId);
+                        if (pool is not null)
+                        {
+                            _poolItems.Clear();
+                            foreach (var c in pool)
+                                TryAddPool(c);
+                        }
                     }
+                }
+                finally
+                {
+                    _suppressDirty = false;
                 }
 
                 break;
@@ -970,9 +1050,18 @@ public sealed class ChainControlForm : Form
 
     private void NewFixedProfile()
     {
-        _fixedItems.Clear();
-        _fixedName.Text = "strict-chain";
-        _fixedProfilePicker.SelectedIndex = -1;
+        _suppressDirty = true;
+        try
+        {
+            _fixedItems.Clear();
+            _fixedName.Text = "strict-chain";
+            _fixedProfilePicker.SelectedIndex = -1;
+            ClearFixedDirty();
+        }
+        finally
+        {
+            _suppressDirty = false;
+        }
         ClearBanner();
         RefreshStatus();
     }
@@ -996,25 +1085,36 @@ public sealed class ChainControlForm : Form
                 return;
             }
 
-            _fixedName.Text = p.Name;
-            _fixedItems.Clear();
-            foreach (var h in p.Hops)
-                _fixedItems.Add(new HopItem(h));
-
-            if (!string.IsNullOrWhiteSpace(p.CandidatePoolId))
+            _suppressDirty = true;
+            try
             {
-                _poolName.Text = p.CandidatePoolId;
-                var pool = _pools.Load(p.CandidatePoolId);
-                if (pool is not null)
+                _fixedName.Text = p.Name;
+                _fixedItems.Clear();
+                foreach (var h in p.Hops)
+                    _fixedItems.Add(new HopItem(h));
+
+                if (!string.IsNullOrWhiteSpace(p.CandidatePoolId))
                 {
-                    _poolItems.Clear();
-                    foreach (var c in pool)
-                        TryAddPool(c);
-                    RefreshPoolPicker(p.CandidatePoolId);
+                    _poolName.Text = p.CandidatePoolId;
+                    var pool = _pools.Load(p.CandidatePoolId);
+                    if (pool is not null)
+                    {
+                        _poolItems.Clear();
+                        foreach (var c in pool)
+                            TryAddPool(c);
+                        RefreshPoolPicker(p.CandidatePoolId);
+                        ClearPoolDirty();
+                    }
                 }
+
+                RefreshFixedProfilePicker(p.Name);
+                ClearFixedDirty();
+            }
+            finally
+            {
+                _suppressDirty = false;
             }
 
-            RefreshFixedProfilePicker(p.Name);
             ShowBanner($"Loaded chain \"{p.Name}\".", success: true);
             RefreshStatus();
         }
@@ -1075,9 +1175,18 @@ public sealed class ChainControlForm : Form
 
     private void NewPoolProfile()
     {
-        _poolItems.Clear();
-        _poolName.Text = "default-pool";
-        _poolPicker.SelectedIndex = -1;
+        _suppressDirty = true;
+        try
+        {
+            _poolItems.Clear();
+            _poolName.Text = "default-pool";
+            _poolPicker.SelectedIndex = -1;
+            ClearPoolDirty();
+        }
+        finally
+        {
+            _suppressDirty = false;
+        }
         ClearBanner();
         RefreshStatus();
     }
@@ -1101,12 +1210,21 @@ public sealed class ChainControlForm : Form
                 return;
             }
 
-            _poolName.Text = name;
-            _poolItems.Clear();
-            foreach (var c in pool)
-                TryAddPool(c);
+            _suppressDirty = true;
+            try
+            {
+                _poolName.Text = name;
+                _poolItems.Clear();
+                foreach (var c in pool)
+                    TryAddPool(c);
+                RefreshPoolPicker(name);
+                ClearPoolDirty();
+            }
+            finally
+            {
+                _suppressDirty = false;
+            }
 
-            RefreshPoolPicker(name);
             RefreshPoolBadges();
             ShowBanner($"Loaded pool \"{name}\" ({_poolItems.Count} candidate(s)).", success: true);
             RefreshStatus();
@@ -1216,7 +1334,7 @@ public sealed class ChainControlForm : Form
 
     private void AddFixedFromSession()
     {
-        var alive = _getAliveResults().Where(r => r.IsAlive).ToList();
+        var alive = _getSessionResults().Where(r => r.IsAlive).ToList();
         if (alive.Count == 0)
         {
             ShowBanner("No alive proxies in the current session.", success: false);
@@ -1288,7 +1406,7 @@ public sealed class ChainControlForm : Form
 
     private void ImportPoolFromSession()
     {
-        var matching = _getAliveResults().Where(MatchesEligibilityPolicy).ToList();
+        var matching = _getSessionResults().Where(MatchesEligibilityPolicy).ToList();
         if (matching.Count == 0)
         {
             ShowBanner(
@@ -1366,6 +1484,86 @@ public sealed class ChainControlForm : Form
         _poolItems.ResetBindings();
         _poolCandidates.Invalidate();
         _poolCandidates.Refresh();
+    }
+
+    private async Task RecheckPoolAsync()
+    {
+        if (_poolItems.Count == 0)
+        {
+            ShowBanner("Add Smart Pool candidates before rechecking.", success: false);
+            return;
+        }
+
+        if (_busy)
+            return;
+
+        SetBusy(true);
+        ShowBanner($"Rechecking {_poolItems.Count} candidate(s)…", success: true);
+
+        var checker = new ProxyChecker(_settings);
+        var alive = 0;
+        var failed = 0;
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+            await checker.EnsureClientIpAsync(cts.Token).ConfigureAwait(true);
+
+            for (var i = 0; i < _poolItems.Count; i++)
+            {
+                var item = _poolItems[i];
+                var hop = item.Candidate.Hop;
+                ShowBanner($"Rechecking {i + 1}/{_poolItems.Count}: {hop.Endpoint}…", success: true);
+
+                ProxyCheckResult result;
+                try
+                {
+                    result = hop.Kind == ProxyKind.Http
+                        ? await checker.CheckHttpAsync(hop.Proxy, cts.Token).ConfigureAwait(true)
+                        : await checker.CheckSocksAsync(hop.Proxy, cts.Token).ConfigureAwait(true);
+                }
+                catch (OperationCanceledException)
+                {
+                    ShowBanner("Recheck cancelled.", success: false);
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    result = new ProxyCheckResult
+                    {
+                        Proxy = hop.Proxy,
+                        IsAlive = false,
+                        Failure = FailureReason.ConnectRefused,
+                        ErrorMessage = ex.Message,
+                        CheckedAt = DateTimeOffset.UtcNow
+                    };
+                }
+
+                _checkOverrides[EndpointKey(hop)] = result;
+                item.Candidate = item.Candidate with
+                {
+                    Country = string.IsNullOrWhiteSpace(result.Country) ? item.Candidate.Country : result.Country,
+                    LatencyMs = result.IsAlive ? result.LatencyMs : item.Candidate.LatencyMs,
+                    SuccessRate = result.IsAlive ? 1.0 : 0.0,
+                    LastChecked = result.CheckedAt
+                };
+                _onCheckResult?.Invoke(result);
+
+                if (result.IsAlive)
+                    alive++;
+                else
+                    failed++;
+            }
+
+            MarkPoolDirty();
+            RefreshPoolBadges();
+            RefreshStatus();
+            ShowBanner($"Recheck complete: {alive} alive, {failed} failed.", success: alive > 0 || failed == 0);
+        }
+        finally
+        {
+            SetBusy(false);
+        }
     }
 
     private void RemoveFailedPoolItems()
@@ -1473,19 +1671,33 @@ public sealed class ChainControlForm : Form
     private Dictionary<string, ProxyCheckResult> SessionResultsByEndpoint()
     {
         var map = new Dictionary<string, ProxyCheckResult>(StringComparer.OrdinalIgnoreCase);
-        foreach (var r in _getAliveResults())
+        foreach (var r in EnumerateKnownResults())
         {
             var key = EndpointKey(ResultToHop(r));
-            map.TryAdd(key, r);
+            map[key] = r;
         }
 
         return map;
     }
 
+    private IEnumerable<ProxyCheckResult> EnumerateKnownResults()
+    {
+        foreach (var r in _checkOverrides.Values)
+            yield return r;
+        foreach (var r in _getSessionResults())
+            yield return r;
+    }
+
     private bool TryFindSessionResult(ProxyHop hop, out ProxyCheckResult matched)
     {
         var exactKey = EndpointKey(hop);
-        foreach (var r in _getAliveResults())
+        if (_checkOverrides.TryGetValue(exactKey, out var over))
+        {
+            matched = over;
+            return true;
+        }
+
+        foreach (var r in _getSessionResults())
         {
             var resultHop = ResultToHop(r);
             if (string.Equals(EndpointKey(resultHop), exactKey, StringComparison.OrdinalIgnoreCase))
@@ -1498,7 +1710,7 @@ public sealed class ChainControlForm : Form
         // Prefer kind/protocol match above; fall back to host:port.
         var hostPort = HostPortKey(hop);
         ProxyCheckResult? fallback = null;
-        foreach (var r in _getAliveResults())
+        foreach (var r in EnumerateKnownResults())
         {
             var resultHop = ResultToHop(r);
             if (!string.Equals(HostPortKey(resultHop), hostPort, StringComparison.OrdinalIgnoreCase))
@@ -1555,6 +1767,7 @@ public sealed class ChainControlForm : Form
             _profiles.Save(profile);
             PersistActiveProfileId(profile.Id);
             RefreshFixedProfilePicker(name);
+            ClearFixedDirty();
             ShowBanner($"Saved chain \"{name}\".", success: true);
         }
         catch (Exception ex)
@@ -1576,6 +1789,7 @@ public sealed class ChainControlForm : Form
         {
             _pools.Save(name, _poolItems.Select(i => i.Candidate).ToList());
             RefreshPoolPicker(name);
+            ClearPoolDirty();
             ShowBanner($"Saved pool \"{name}\".", success: true);
         }
         catch (Exception ex)
@@ -2157,7 +2371,7 @@ public sealed class ChainControlForm : Form
 
     private sealed class PoolItem(PoolCandidate candidate, Func<PoolCandidate, string> badgeResolver)
     {
-        public PoolCandidate Candidate { get; } = candidate;
+        public PoolCandidate Candidate { get; set; } = candidate;
         public override string ToString()
         {
             var c = Candidate;
@@ -2218,6 +2432,73 @@ public sealed class ChainControlForm : Form
             };
             buttons.Controls.Add(cancel);
 
+            Controls.Add(label);
+            Controls.Add(buttons);
+        }
+    }
+
+    private sealed class GatewayCloseDialog : Form
+    {
+        public GatewayCloseDialog()
+        {
+            Text = "Proxy Chains";
+            StartPosition = FormStartPosition.CenterParent;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            ShowInTaskbar = false;
+            AutoScaleMode = AutoScaleMode.Dpi;
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            ClientSize = new Size(460, 160);
+            Font = new Font("Segoe UI", 9f);
+
+            var label = new Label
+            {
+                Text = "The local gateway is still running.\n\nChoose how to leave this window:",
+                AutoSize = false,
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.TopLeft,
+                Padding = new Padding(12, 12, 12, 0)
+            };
+
+            var buttons = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Bottom,
+                FlowDirection = FlowDirection.RightToLeft,
+                WrapContents = true,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Padding = new Padding(8, 8, 8, 10)
+            };
+
+            var cancel = new Button
+            {
+                Text = "Cancel",
+                DialogResult = DialogResult.Cancel,
+                AutoSize = true,
+                MinimumSize = new Size(88, 32),
+                Margin = new Padding(6, 0, 0, 0)
+            };
+            var stopClose = new Button
+            {
+                Text = "Stop and close",
+                DialogResult = DialogResult.No,
+                AutoSize = true,
+                MinimumSize = new Size(120, 32),
+                Margin = new Padding(6, 0, 0, 0)
+            };
+            var keep = new Button
+            {
+                Text = "Keep running",
+                DialogResult = DialogResult.Yes,
+                AutoSize = true,
+                MinimumSize = new Size(120, 32),
+                Margin = new Padding(6, 0, 0, 0)
+            };
+
+            AcceptButton = keep;
+            CancelButton = cancel;
+            buttons.Controls.AddRange([cancel, stopClose, keep]);
             Controls.Add(label);
             Controls.Add(buttons);
         }

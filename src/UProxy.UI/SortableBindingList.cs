@@ -53,4 +53,6 @@ public sealed class SortableBindingList<T> : BindingList<T>
         _isSorted = false;
         _sortProperty = null;
     }
+
+    public void NotifyItemChanged(int index) => ResetItem(index);
 }
