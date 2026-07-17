@@ -47,7 +47,8 @@ public sealed class MainForm : Form
     private readonly Button _btnStop = new() { Text = "Stop", AutoSize = true, Enabled = false };
     private readonly Button _btnExport = new() { Text = "Export", AutoSize = true };
     private readonly Button _btnSettings = new() { Text = "Settings", AutoSize = true };
-    private readonly Button _btnSetProxy = new() { Text = "Proxy Chains…", AutoSize = true };
+    private readonly Button _btnSetProxy = new() { Text = "Set System Proxy…", AutoSize = true };
+    private readonly Button _btnProxyChains = new() { Text = "Proxy Chains…", AutoSize = true };
     private readonly Button _btnResetProxy = new() { Text = "Emergency Reset", AutoSize = true };
     private FlowLayoutPanel? _topBar;
     private FlowLayoutPanel? _actionBar;
@@ -213,7 +214,7 @@ public sealed class MainForm : Form
         foreach (var btn in new[]
                  {
                      _btnLoad, _btnScrape, _btnCheck, _btnStop, _btnExport, _btnSettings,
-                     _btnSetProxy, _btnResetProxy
+                     _btnSetProxy, _btnProxyChains, _btnResetProxy
                  })
         {
             btn.Margin = new Padding(2);
@@ -284,6 +285,7 @@ public sealed class MainForm : Form
         file.DropDownItems.Add("Exit", null, (_, _) => Close());
         var tools = new ToolStripMenuItem("Tools");
         tools.DropDownItems.Add("Settings…", null, (_, _) => OpenSettings());
+        tools.DropDownItems.Add("Set System Proxy…", null, (_, _) => SetSystemProxyOptIn());
         tools.DropDownItems.Add("Proxy Chains…", null, (_, _) => OpenProxyChains());
         tools.DropDownItems.Add("Scan for secrets (TruffleHog)…", null, (_, _) => OpenSecretScanner());
         tools.DropDownItems.Add("Emergency Reset System Proxy", null, (_, _) => EmergencyReset());
@@ -291,8 +293,8 @@ public sealed class MainForm : Form
         help.DropDownItems.Add("About μProxy Tool 2.0", null, (_, _) =>
             MessageBox.Show(
                 "μProxy Tool 2.0\n\nProxy scraper & checker.\n" +
-                "v3 proxychains development build — local TCP-only HTTP/SOCKS gateway.\n" +
-                "No UDP/TUN/WFP; system proxy (optional) points at the local HTTP gateway only.\n\n" +
+                "• Set System Proxy — point WinINET at a selected alive proxy (opt-in).\n" +
+                "• Proxy Chains — local HTTP/SOCKS gateway with multi-hop / failover (alternative).\n\n" +
                 "No update phone-home. GeoIP is local-only.\n" +
                 "System proxy changes are opt-in with restore.\n\n" +
                 "Based on the μProxy Tool 1.81 feature set.",
@@ -387,6 +389,7 @@ public sealed class MainForm : Form
         menu.Items.Add("Select all", null, (_, _) => _grid.SelectAll());
         menu.Items.Add("Export results…", null, (_, _) => ExportResults());
         menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Set System Proxy…", null, (_, _) => SetSystemProxyOptIn());
         menu.Items.Add("Open Proxy Chains…", null, (_, _) => OpenProxyChains());
         menu.Items.Add("Add to Fixed Chain…", null, (_, _) => OpenProxyChains(seedFixed: GetSelectedAliveResults()));
         menu.Items.Add("Add to Smart Pool…", null, (_, _) => OpenProxyChains(seedPool: GetSelectedAliveResults()));
@@ -422,7 +425,8 @@ public sealed class MainForm : Form
         };
         _btnExport.Click += (_, _) => ExportResults();
         _btnSettings.Click += (_, _) => OpenSettings();
-        _btnSetProxy.Click += (_, _) => OpenProxyChains();
+        _btnSetProxy.Click += (_, _) => SetSystemProxyOptIn();
+        _btnProxyChains.Click += (_, _) => OpenProxyChains();
         _btnResetProxy.Click += (_, _) => EmergencyReset();
         FormClosing += (_, _) =>
         {
@@ -569,6 +573,9 @@ public sealed class MainForm : Form
         _btnCheck.Enabled = !busy;
         _btnExport.Enabled = !busy && _rows.Count > 0;
         _btnSettings.Enabled = !busy;
+        _btnSetProxy.Enabled = !busy;
+        _btnProxyChains.Enabled = !busy;
+        _btnResetProxy.Enabled = !busy;
         _btnStop.Enabled = busy;
         _httpRadio.Enabled = !busy;
         _socksRadio.Enabled = !busy;
@@ -584,9 +591,80 @@ public sealed class MainForm : Form
         var p = proxies ?? _session?.Proxies.Count ?? 0;
         var a = alive ?? _rows.Count;
         var title = $"μProxy Tool 2.0 [{p} loaded / {a} alive]";
+        if (_proxyManager.IsSupported && _proxyManager.HasPendingRestore && !_chainGateway.SystemProxyActive)
+            title += " [system proxy ACTIVE]";
         if (_chainGateway.IsRunning)
             title += $" [gateway :{_chainGateway.HttpPort}/:{_chainGateway.SocksPort}]";
         Text = title;
+    }
+
+    private void SetSystemProxyOptIn()
+    {
+        if (!_proxyManager.IsSupported)
+        {
+            MessageBox.Show("System proxy is only available on Windows.", "μProxy Tool",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        if (_grid.CurrentRow?.DataBoundItem is not ResultRow row)
+        {
+            MessageBox.Show("Select an alive proxy in the list first.", "μProxy Tool",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        if (_chainGateway.IsRunning && _chainGateway.SystemProxyActive)
+        {
+            var stopGw = MessageBox.Show(
+                "Proxy Chains currently owns the Windows system proxy (local gateway).\n\n" +
+                "Stop the gateway and set system proxy to the selected result instead?",
+                "Set System Proxy",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2);
+            if (stopGw != DialogResult.Yes)
+                return;
+
+            try
+            {
+                _chainGateway.StopAsync().GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Could not stop the chain gateway: " + ex.Message, "μProxy Tool",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+        }
+
+        var warn = MessageBox.Show(
+            "WARNING — privacy & connectivity\n\n" +
+            $"This will set your Windows (WinINET) system proxy to:\n  {row.Proxy}\n\n" +
+            "• Your browser/apps using system proxy will send traffic through this public proxy.\n" +
+            "• The proxy operator may see your destinations.\n" +
+            "• Your previous settings will be saved and can be restored with Emergency Reset.\n\n" +
+            "Prefer multi-hop / local gateway? Use Proxy Chains… instead.\n\n" +
+            "Continue?",
+            "Set System Proxy — Opt-in",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2);
+
+        if (warn != DialogResult.Yes)
+            return;
+
+        try
+        {
+            _proxyManager.SetProxyOptIn(row.Proxy);
+            UpdateTitle();
+            SetStatus($"System proxy set to {row.Proxy}. Use Emergency Reset to restore.");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("Failed to set proxy: " + ex.Message, "μProxy Tool",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     private void LoadProxies()
