@@ -89,8 +89,8 @@ public sealed class ChainControlForm : Form
         StartPosition = FormStartPosition.CenterParent;
         AutoScaleMode = AutoScaleMode.Dpi;
         AutoScaleDimensions = new SizeF(96F, 96F);
-        MinimumSize = new Size(720, 480);
-        ClientSize = new Size(780, 560);
+        MinimumSize = new Size(820, 520);
+        ClientSize = new Size(880, 600);
         Font = new Font("Segoe UI", 9f);
         BackColor = Color.White;
         ShowInTaskbar = false;
@@ -200,25 +200,15 @@ public sealed class ChainControlForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 2,
-            RowCount = 3,
-            Padding = new Padding(6)
+            RowCount = 2,
+            Padding = new Padding(8)
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, SideColumnWidth));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        var side = new FlowLayoutPanel
-        {
-            FlowDirection = FlowDirection.TopDown,
-            AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            WrapContents = false,
-            Dock = DockStyle.Fill,
-            Padding = new Padding(6, 0, 0, 0)
-        };
-
+        var side = BuildSidePanel();
         var addSession = MakeSideButton("Add from session");
         var paste = MakeSideButton("Paste ordered list");
         var remove = MakeSideButton("Remove");
@@ -239,21 +229,11 @@ public sealed class ChainControlForm : Form
 
         side.Controls.AddRange([addSession, paste, remove, up, down, save, test, _btnStartStrict]);
 
-        var nameRow = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            AutoSize = true,
-            ColumnCount = 2,
-            Margin = new Padding(0, 6, 0, 0)
-        };
-        nameRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 56));
-        nameRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-        nameRow.Controls.Add(new Label { Text = "Name:", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 6, 8, 0) }, 0, 0);
-        nameRow.Controls.Add(_fixedName, 1, 0);
+        var nameRow = BuildNameRow(_fixedName);
 
         root.Controls.Add(_fixedHops, 0, 0);
         root.Controls.Add(side, 1, 0);
-        root.SetColumnSpan(nameRow, 2);
+        root.SetRowSpan(side, 2);
         root.Controls.Add(nameRow, 0, 1);
 
         page.Controls.Add(root);
@@ -268,24 +248,15 @@ public sealed class ChainControlForm : Form
             Dock = DockStyle.Fill,
             ColumnCount = 2,
             RowCount = 2,
-            Padding = new Padding(6)
+            Padding = new Padding(8)
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, SideColumnWidth));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        var side = new FlowLayoutPanel
-        {
-            FlowDirection = FlowDirection.TopDown,
-            AutoSize = true,
-            AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            WrapContents = false,
-            Dock = DockStyle.Fill,
-            Padding = new Padding(6, 0, 0, 0)
-        };
-
-        var importAlive = MakeSideButton("Import alive from session");
+        var side = BuildSidePanel();
+        var importAlive = MakeSideButton("Import from session");
         var paste = MakeSideButton("Paste");
         var remove = MakeSideButton("Remove");
         var save = MakeSideButton("Save pool");
@@ -301,25 +272,64 @@ public sealed class ChainControlForm : Form
 
         side.Controls.AddRange([importAlive, paste, remove, save, _btnStartFailover, _btnStartTwoHop]);
 
-        var nameRow = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            AutoSize = true,
-            ColumnCount = 2,
-            Margin = new Padding(0, 6, 0, 0)
-        };
-        nameRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 56));
-        nameRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-        nameRow.Controls.Add(new Label { Text = "Name:", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 6, 8, 0) }, 0, 0);
-        nameRow.Controls.Add(_poolName, 1, 0);
+        var nameRow = BuildNameRow(_poolName);
 
         root.Controls.Add(_poolCandidates, 0, 0);
         root.Controls.Add(side, 1, 0);
-        root.SetColumnSpan(nameRow, 2);
+        root.SetRowSpan(side, 2);
         root.Controls.Add(nameRow, 0, 1);
 
         page.Controls.Add(root);
         return page;
+    }
+
+    /// <summary>Fixed side-rail width so long action buttons are never clipped.</summary>
+    private const int SideColumnWidth = 200;
+
+    private static FlowLayoutPanel BuildSidePanel() =>
+        new()
+        {
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            AutoScroll = true,
+            Dock = DockStyle.Fill,
+            Padding = new Padding(8, 0, 0, 0),
+            Margin = new Padding(0)
+        };
+
+    private static TableLayoutPanel BuildNameRow(TextBox nameBox)
+    {
+        var row = new TableLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 2,
+            RowCount = 1,
+            Margin = new Padding(0, 8, 0, 0),
+            Padding = new Padding(0)
+        };
+        // AutoSize label column — Absolute widths wrap "Name:" into "Na"/"me:" under DPI.
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        row.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var label = new Label
+        {
+            Text = "Name:",
+            AutoSize = true,
+            Anchor = AnchorStyles.Left,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Margin = new Padding(0, 6, 10, 0),
+            UseMnemonic = false
+        };
+        nameBox.Dock = DockStyle.Fill;
+        nameBox.Margin = new Padding(0, 2, 0, 2);
+        nameBox.MinimumSize = new Size(120, 0);
+
+        row.Controls.Add(label, 0, 0);
+        row.Controls.Add(nameBox, 1, 0);
+        return row;
     }
 
     private void WireEvents()
@@ -339,10 +349,12 @@ public sealed class ChainControlForm : Form
         var b = new Button
         {
             Text = text,
-            AutoSize = true,
-            Padding = new Padding(10, 5, 10, 5),
-            MinimumSize = new Size(160, 32),
-            Margin = new Padding(0, 0, 0, 6)
+            AutoSize = false,
+            Size = new Size(SideColumnWidth - 16, 34),
+            Margin = new Padding(0, 0, 0, 6),
+            Padding = new Padding(8, 4, 8, 4),
+            TextAlign = ContentAlignment.MiddleLeft,
+            UseMnemonic = false
         };
         return b;
     }
@@ -409,7 +421,7 @@ public sealed class ChainControlForm : Form
         if (!running && canHeaderStart)
         {
             _lblHint.Text = PreferPoolTab()
-                ? "Hops/pool loaded — click Start to run Fast Failover (or use Start Strict on the Fixed tab)."
+                ? "Pool loaded — click Start to run Fast Failover."
                 : "Hops loaded — click Start to run the local gateway.";
             _lblHint.Visible = true;
         }
@@ -420,7 +432,9 @@ public sealed class ChainControlForm : Form
         }
         else
         {
-            _lblHint.Text = "Add hops (Fixed Chain) or pool candidates (Smart Pool), then click Start.";
+            _lblHint.Text = PreferPoolTab()
+                ? "Import or paste pool candidates, then click Start."
+                : "Add hops on Fixed Chain, then click Start.";
             _lblHint.Visible = true;
         }
     }
