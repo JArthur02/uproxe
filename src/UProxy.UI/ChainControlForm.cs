@@ -133,8 +133,8 @@ public sealed class ChainControlForm : Form
         StartPosition = FormStartPosition.CenterParent;
         AutoScaleMode = AutoScaleMode.Dpi;
         AutoScaleDimensions = new SizeF(96F, 96F);
-        MinimumSize = new Size(900, 560);
-        ClientSize = new Size(960, 640);
+        MinimumSize = new Size(940, 620);
+        ClientSize = new Size(980, 700);
         Font = new Font("Segoe UI", 9f);
         BackColor = Color.White;
         ShowInTaskbar = false;
@@ -223,36 +223,38 @@ public sealed class ChainControlForm : Form
         _btnCopyHttp.MinimumSize = new Size(72, 28);
         _btnCopySocks.MinimumSize = new Size(72, 28);
 
-        var root = new TableLayoutPanel
+        // Dock-based shell: AutoSize+Dock.Fill inside TableLayoutPanel was collapsing the
+        // tab page to a thin strip and clipping the side-action buttons.
+        var note = new Label
         {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 3,
-            Padding = new Padding(10)
+            Text = "Does not route every Windows app and does not route UDP.",
+            AutoSize = false,
+            Dock = DockStyle.Bottom,
+            Height = 28,
+            ForeColor = Color.FromArgb(120, 70, 20),
+            TextAlign = ContentAlignment.MiddleLeft,
+            Padding = new Padding(10, 0, 10, 4)
         };
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        var header = new TableLayoutPanel
+        var header = new FlowLayoutPanel
         {
-            Dock = DockStyle.Fill,
+            Dock = DockStyle.Top,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            ColumnCount = 1,
-            Margin = new Padding(0, 0, 0, 8)
+            Padding = new Padding(10, 10, 10, 6)
         };
-        header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-        header.Controls.Add(_lblMode, 0, header.RowCount++);
-        header.Controls.Add(_lblHttp, 0, header.RowCount++);
-        header.Controls.Add(_lblSocks, 0, header.RowCount++);
-        header.Controls.Add(_lblWinInet, 0, header.RowCount++);
-        header.Controls.Add(_lblRouting, 0, header.RowCount++);
-        header.Controls.Add(_lblState, 0, header.RowCount++);
-        header.Controls.Add(_lblHops, 0, header.RowCount++);
-        header.Controls.Add(_lblHint, 0, header.RowCount++);
-        header.Controls.Add(_lblBanner, 0, header.RowCount++);
+
+        foreach (var lbl in new[]
+                 {
+                     _lblMode, _lblHttp, _lblSocks, _lblWinInet, _lblRouting, _lblState, _lblHops,
+                     _lblHint, _lblBanner
+                 })
+        {
+            lbl.Margin = new Padding(0, 0, 0, 2);
+            header.Controls.Add(lbl);
+        }
 
         var headerBtns = new FlowLayoutPanel
         {
@@ -263,59 +265,23 @@ public sealed class ChainControlForm : Form
             Margin = new Padding(0, 6, 0, 0),
             Padding = new Padding(0)
         };
-        // Exit IP is verified automatically after Start; no separate checker button.
-        headerBtns.Controls.Add(_btnStart);
-        headerBtns.Controls.Add(_btnStop);
-        headerBtns.Controls.Add(_btnCopyHttp);
-        headerBtns.Controls.Add(_btnCopySocks);
-        headerBtns.Controls.Add(_btnRestore);
-        header.Controls.Add(headerBtns, 0, header.RowCount++);
+        headerBtns.Controls.AddRange([_btnStart, _btnStop, _btnCopyHttp, _btnCopySocks, _btnRestore]);
+        header.Controls.Add(headerBtns);
 
+        _tabs.Dock = DockStyle.Fill;
         _tabs.TabPages.Add(BuildFixedTab());
         _tabs.TabPages.Add(BuildPoolTab());
 
-        var note = new Label
-        {
-            Text = "Does not route every Windows app and does not route UDP.",
-            AutoSize = true,
-            ForeColor = Color.FromArgb(120, 70, 20),
-            Margin = new Padding(0, 8, 0, 0)
-        };
-
-        root.Controls.Add(header, 0, 0);
-        root.Controls.Add(_tabs, 0, 1);
-        root.Controls.Add(note, 0, 2);
-        Controls.Add(root);
+        // Add Fill first, then Top/Bottom so docking reserves edges correctly.
+        Controls.Add(_tabs);
+        Controls.Add(header);
+        Controls.Add(note);
     }
 
     private TabPage BuildFixedTab()
     {
-        var page = new TabPage("Fixed Chain");
-        var root = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 2,
-            RowCount = 1,
-            Padding = new Padding(8)
-        };
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, SideColumnWidth));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        var page = new TabPage("Fixed Chain") { Padding = new Padding(8) };
 
-        var left = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 3,
-            Margin = new Padding(0),
-            Padding = new Padding(0)
-        };
-        left.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-        left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        left.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
-        left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-
-        var side = BuildSidePanel();
         var addSession = MakeSideButton("Add from session");
         var paste = MakeSideButton("Paste ordered list");
         var remove = MakeSideButton("Remove");
@@ -330,20 +296,21 @@ public sealed class ChainControlForm : Form
         down.Click += (_, _) => MoveFixed(1);
         test.Click += async (_, _) => await TestFixedAsync();
 
-        side.Controls.AddRange([addSession, paste, remove, up, down, test]);
+        var side = BuildSideActions(addSession, paste, remove, up, down, test);
 
+        var left = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 0, 8, 0) };
         var toolbar = BuildFixedProfileToolbar();
+        toolbar.Dock = DockStyle.Top;
         var nameRow = BuildNameRow(_fixedName);
+        nameRow.Dock = DockStyle.Bottom;
         _fixedHops.Dock = DockStyle.Fill;
 
-        left.Controls.Add(toolbar, 0, 0);
-        left.Controls.Add(_fixedHops, 0, 1);
-        left.Controls.Add(nameRow, 0, 2);
+        left.Controls.Add(_fixedHops);
+        left.Controls.Add(toolbar);
+        left.Controls.Add(nameRow);
 
-        root.Controls.Add(left, 0, 0);
-        root.Controls.Add(side, 1, 0);
-
-        page.Controls.Add(root);
+        page.Controls.Add(left);
+        page.Controls.Add(side);
         return page;
     }
 
@@ -355,9 +322,9 @@ public sealed class ChainControlForm : Form
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             WrapContents = true,
             FlowDirection = FlowDirection.LeftToRight,
-            Dock = DockStyle.Fill,
-            Margin = new Padding(0, 0, 0, 6),
-            Padding = new Padding(0)
+            Dock = DockStyle.Top,
+            Margin = new Padding(0),
+            Padding = new Padding(0, 0, 0, 6)
         };
 
         var btnNew = MakeToolbarButton("New");
@@ -380,33 +347,8 @@ public sealed class ChainControlForm : Form
 
     private TabPage BuildPoolTab()
     {
-        var page = new TabPage("Smart Pool");
-        var root = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 2,
-            RowCount = 1,
-            Padding = new Padding(8)
-        };
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, SideColumnWidth));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        var page = new TabPage("Smart Pool") { Padding = new Padding(8) };
 
-        var left = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 4,
-            Margin = new Padding(0),
-            Padding = new Padding(0)
-        };
-        left.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-        left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        left.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
-        left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-
-        var side = BuildSidePanel();
         var importAlive = MakeSideButton("Import from session");
         var paste = MakeSideButton("Paste candidates");
         var remove = MakeSideButton("Remove");
@@ -419,35 +361,44 @@ public sealed class ChainControlForm : Form
         recheck.Click += async (_, _) => await RecheckPoolAsync();
         removeFailed.Click += (_, _) => RemoveFailedPoolItems();
 
-        side.Controls.AddRange([importAlive, paste, remove, recheck, removeFailed]);
+        var side = BuildSideActions(importAlive, paste, remove, recheck, removeFailed);
 
-        _poolEligibility.Items.AddRange([
-            "Elite only (default)",
-            "Elite + Anonymous",
-            "Any alive"
-        ]);
-        _poolEligibility.SelectedIndex = 0;
+        if (_poolEligibility.Items.Count == 0)
+        {
+            _poolEligibility.Items.AddRange([
+                "Elite only (default)",
+                "Elite + Anonymous",
+                "Any alive"
+            ]);
+            _poolEligibility.SelectedIndex = 0;
+        }
 
-        _poolMode.Items.AddRange([
-            "Fast failover",
-            "Auto 2-hop"
-        ]);
-        _poolMode.SelectedIndex = 0;
+        if (_poolMode.Items.Count == 0)
+        {
+            _poolMode.Items.AddRange([
+                "Fast failover",
+                "Auto 2-hop"
+            ]);
+            _poolMode.SelectedIndex = 0;
+        }
 
+        var left = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 0, 8, 0) };
         var toolbar = BuildPoolProfileToolbar();
+        toolbar.Dock = DockStyle.Top;
         var options = BuildPoolOptionsPanel();
+        options.Dock = DockStyle.Bottom;
         var nameRow = BuildNameRow(_poolName);
+        nameRow.Dock = DockStyle.Bottom;
         _poolCandidates.Dock = DockStyle.Fill;
 
-        left.Controls.Add(toolbar, 0, 0);
-        left.Controls.Add(_poolCandidates, 0, 1);
-        left.Controls.Add(options, 0, 2);
-        left.Controls.Add(nameRow, 0, 3);
+        // Bottom dock: last added sits on the bottom edge.
+        left.Controls.Add(_poolCandidates);
+        left.Controls.Add(toolbar);
+        left.Controls.Add(options);
+        left.Controls.Add(nameRow);
 
-        root.Controls.Add(left, 0, 0);
-        root.Controls.Add(side, 1, 0);
-
-        page.Controls.Add(root);
+        page.Controls.Add(left);
+        page.Controls.Add(side);
         return page;
     }
 
@@ -459,9 +410,9 @@ public sealed class ChainControlForm : Form
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             WrapContents = true,
             FlowDirection = FlowDirection.LeftToRight,
-            Dock = DockStyle.Fill,
-            Margin = new Padding(0, 0, 0, 6),
-            Padding = new Padding(0)
+            Dock = DockStyle.Top,
+            Margin = new Padding(0),
+            Padding = new Padding(0, 0, 0, 6)
         };
 
         var btnNew = MakeToolbarButton("New");
@@ -493,18 +444,18 @@ public sealed class ChainControlForm : Form
     {
         var panel = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill,
+            Dock = DockStyle.Bottom,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 2,
             RowCount = 2,
-            Margin = new Padding(0, 8, 0, 0),
-            Padding = new Padding(0)
+            Margin = new Padding(0),
+            Padding = new Padding(0, 8, 0, 4)
         };
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30f));
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30f));
 
         var eligibilityLabel = new Label
         {
@@ -525,6 +476,8 @@ public sealed class ChainControlForm : Form
             UseMnemonic = false
         };
 
+        _poolEligibility.Dock = DockStyle.Fill;
+        _poolMode.Dock = DockStyle.Fill;
         _poolEligibility.Margin = new Padding(0, 2, 0, 2);
         _poolMode.Margin = new Padding(0, 2, 0, 2);
 
@@ -535,36 +488,51 @@ public sealed class ChainControlForm : Form
         return panel;
     }
 
-    /// <summary>Fixed side-rail width so long action buttons are never clipped.</summary>
-    private const int SideColumnWidth = 228;
+    /// <summary>Side-rail width for action buttons (DPI-friendly fixed column).</summary>
+    private const int SideColumnWidth = 200;
 
-    private static FlowLayoutPanel BuildSidePanel() =>
-        new()
+    private static TableLayoutPanel BuildSideActions(params Button[] buttons)
+    {
+        var side = new TableLayoutPanel
         {
-            FlowDirection = FlowDirection.TopDown,
-            WrapContents = false,
-            AutoScroll = true,
-            Dock = DockStyle.Fill,
+            Dock = DockStyle.Right,
+            Width = SideColumnWidth,
+            ColumnCount = 1,
+            RowCount = buttons.Length + 1,
             Padding = new Padding(8, 0, 0, 0),
             Margin = new Padding(0)
         };
+        side.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+
+        for (var i = 0; i < buttons.Length; i++)
+        {
+            side.RowStyles.Add(new RowStyle(SizeType.Absolute, 40f));
+            var b = buttons[i];
+            b.Dock = DockStyle.Fill;
+            b.Margin = new Padding(0, 0, 0, 6);
+            side.Controls.Add(b, 0, i);
+        }
+
+        side.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        return side;
+    }
 
     private static TableLayoutPanel BuildNameRow(TextBox nameBox)
     {
         var row = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill,
+            Dock = DockStyle.Bottom,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 2,
             RowCount = 1,
-            Margin = new Padding(0, 8, 0, 0),
-            Padding = new Padding(0)
+            Height = 36,
+            Margin = new Padding(0),
+            Padding = new Padding(0, 8, 0, 0)
         };
-        // AutoSize label column — Absolute widths wrap "Name:" into "Na"/"me:" under DPI.
         row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-        row.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        row.RowStyles.Add(new RowStyle(SizeType.Absolute, 28f));
 
         var label = new Label
         {
@@ -572,11 +540,11 @@ public sealed class ChainControlForm : Form
             AutoSize = true,
             Anchor = AnchorStyles.Left,
             TextAlign = ContentAlignment.MiddleLeft,
-            Margin = new Padding(0, 6, 10, 0),
+            Margin = new Padding(0, 4, 10, 0),
             UseMnemonic = false
         };
         nameBox.Dock = DockStyle.Fill;
-        nameBox.Margin = new Padding(0, 2, 0, 2);
+        nameBox.Margin = new Padding(0, 0, 0, 0);
         nameBox.MinimumSize = new Size(120, 0);
 
         row.Controls.Add(label, 0, 0);
@@ -774,20 +742,16 @@ public sealed class ChainControlForm : Form
         }
     }
 
-    private static Button MakeSideButton(string text)
-    {
-        var b = new Button
+    private static Button MakeSideButton(string text) =>
+        new()
         {
             Text = text,
             AutoSize = false,
-            Size = new Size(SideColumnWidth - 16, 34),
-            Margin = new Padding(0, 0, 0, 6),
-            Padding = new Padding(8, 4, 8, 4),
             TextAlign = ContentAlignment.MiddleLeft,
-            UseMnemonic = false
+            UseMnemonic = false,
+            Padding = new Padding(8, 0, 8, 0),
+            Margin = new Padding(0)
         };
-        return b;
-    }
 
     private static void StyleButton(Button b)
     {
