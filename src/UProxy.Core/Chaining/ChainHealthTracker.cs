@@ -44,11 +44,14 @@ public sealed class ChainHealthTracker
     {
         FailureReason.None => false,
         FailureReason.Cancelled => false,
-        // Single destination refuse / unreachable through an otherwise working proxy.
         FailureReason.TargetUnreachableThroughProxy => false,
-        // Destination TLS / cert problems after the tunnel is up.
+
+        // TLS with the final destination is not necessarily the proxy's fault.
         FailureReason.TlsFailure => false,
-        // Destination HTTP / judge outcomes (not proxy health).
+
+        // TLS with a configured TLS proxy is attributable to that proxy.
+        FailureReason.ProxyTransportTlsFailure => true,
+
         FailureReason.JudgeMismatch => false,
         FailureReason.JudgeUnavailable => false,
         FailureReason.EmptyResponse => false,

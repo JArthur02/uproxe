@@ -168,8 +168,12 @@ public sealed class LocalHttpProxyServer : IAsyncDisposable
         try
         {
             clientStream = client.GetStream();
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(serverCt);
-            linked.CancelAfter(_idleTimeout);
+            using var linked =
+                CancellationTokenSource.CreateLinkedTokenSource(serverCt);
+
+            void ResetIdleTimeout() => linked.CancelAfter(_idleTimeout);
+
+            ResetIdleTimeout();
             var ct = linked.Token;
 
             byte[] headerBytes;
@@ -267,17 +271,37 @@ public sealed class LocalHttpProxyServer : IAsyncDisposable
             switch (bodyKind)
             {
                 case RequestBodyLengthKind.ContentLength:
-                    await CopyExactAsync(clientStream, remoteStream, contentLength, ct).ConfigureAwait(false);
+                    await CopyExactAsync(
+                            clientStream,
+                            remoteStream,
+                            contentLength,
+                            ct,
+                            ResetIdleTimeout)
+                        .ConfigureAwait(false);
                     break;
+
                 case RequestBodyLengthKind.Chunked:
-                    await CopyChunkedRequestBodyAsync(clientStream, remoteStream, ct).ConfigureAwait(false);
+                    await CopyChunkedRequestBodyAsync(
+                            clientStream,
+                            remoteStream,
+                            ct,
+                            ResetIdleTimeout)
+                        .ConfigureAwait(false);
                     break;
+
                 case RequestBodyLengthKind.NoBody:
                     break;
             }
 
             await remoteStream.FlushAsync(ct).ConfigureAwait(false);
-            await CopyUntilEofAsync(remoteStream, clientStream, ct).ConfigureAwait(false);
+            ResetIdleTimeout();
+
+            await CopyUntilEofAsync(
+                    remoteStream,
+                    clientStream,
+                    ct,
+                    ResetIdleTimeout)
+                .ConfigureAwait(false);
         }
         catch
         {
@@ -296,17 +320,36 @@ public sealed class LocalHttpProxyServer : IAsyncDisposable
         }
     }
 
-    private static async Task CopyExactAsync(Stream source, Stream destination, long count, CancellationToken ct)
+    private static async Task CopyExactAsync(
+        Stream source,
+        Stream destination,
+        long count,
+        CancellationToken ct,
+        Action onActivity)
     {
-        var buffer = new byte[Math.Min(81920, Math.Max(1, count))];
+        var bufferLength = (int)Math.Min(81920L, Math.Max(1L, count));
+        var buffer = new byte[bufferLength];
         var remaining = count;
+
         while (remaining > 0)
         {
             var toRead = (int)Math.Min(buffer.Length, remaining);
-            var n = await source.ReadAsync(buffer.AsMemory(0, toRead), ct).ConfigureAwait(false);
+            var n = await source
+                .ReadAsync(buffer.AsMemory(0, toRead), ct)
+                .ConfigureAwait(false);
+
             if (n == 0)
-                throw new EndOfStreamException("Unexpected EOF while copying Content-Length body.");
-            await destination.WriteAsync(buffer.AsMemory(0, n), ct).ConfigureAwait(false);
+            {
+                throw new EndOfStreamException(
+                    "Unexpected EOF while copying Content-Length body.");
+            }
+
+            onActivity();
+
+            await destination
+                .WriteAsync(buffer.AsMemory(0, n), ct)
+                .ConfigureAwait(false);
+
             remaining -= n;
         }
     }
@@ -315,37 +358,72 @@ public sealed class LocalHttpProxyServer : IAsyncDisposable
     /// Copies chunked transfer-coding framing (including the terminating chunk and optional trailers)
     /// from client to origin without decoding.
     /// </summary>
-    private static async Task CopyChunkedRequestBodyAsync(Stream source, Stream destination, CancellationToken ct)
+    private static async Task CopyChunkedRequestBodyAsync(
+        Stream source,
+        Stream destination,
+        CancellationToken ct,
+        Action onActivity)
     {
         while (true)
         {
-            var sizeLine = await ReadLineCrlfAsync(source, ct).ConfigureAwait(false);
-            await WriteAsciiLineAsync(destination, sizeLine, ct).ConfigureAwait(false);
+            var sizeLine = await ReadLineCrlfAsync(source, ct)
+                .ConfigureAwait(false);
+
+            onActivity();
+
+            await WriteAsciiLineAsync(destination, sizeLine, ct)
+                .ConfigureAwait(false);
 
             var sizeToken = sizeLine;
             var semi = sizeToken.IndexOf(';');
             if (semi >= 0)
                 sizeToken = sizeToken[..semi];
+
             sizeToken = sizeToken.Trim();
-            if (!long.TryParse(sizeToken, System.Globalization.NumberStyles.HexNumber, null, out var chunkSize) ||
+
+            if (!long.TryParse(
+                    sizeToken,
+                    System.Globalization.NumberStyles.HexNumber,
+                    null,
+                    out var chunkSize) ||
                 chunkSize < 0)
+            {
                 throw new HttpProxyParseException("Invalid chunk size.");
+            }
 
             if (chunkSize > 0)
             {
-                await CopyExactAsync(source, destination, chunkSize, ct).ConfigureAwait(false);
-                var afterData = await ReadLineCrlfAsync(source, ct).ConfigureAwait(false);
+                await CopyExactAsync(
+                        source,
+                        destination,
+                        chunkSize,
+                        ct,
+                        onActivity)
+                    .ConfigureAwait(false);
+
+                var afterData = await ReadLineCrlfAsync(source, ct)
+                    .ConfigureAwait(false);
+
+                onActivity();
+
                 if (afterData.Length != 0)
                     throw new HttpProxyParseException("Invalid chunk framing.");
-                await WriteAsciiLineAsync(destination, afterData, ct).ConfigureAwait(false);
+
+                await WriteAsciiLineAsync(destination, afterData, ct)
+                    .ConfigureAwait(false);
             }
             else
             {
-                // Trailing headers until empty line.
                 while (true)
                 {
-                    var trailer = await ReadLineCrlfAsync(source, ct).ConfigureAwait(false);
-                    await WriteAsciiLineAsync(destination, trailer, ct).ConfigureAwait(false);
+                    var trailer = await ReadLineCrlfAsync(source, ct)
+                        .ConfigureAwait(false);
+
+                    onActivity();
+
+                    await WriteAsciiLineAsync(destination, trailer, ct)
+                        .ConfigureAwait(false);
+
                     if (trailer.Length == 0)
                         return;
                 }
@@ -353,15 +431,29 @@ public sealed class LocalHttpProxyServer : IAsyncDisposable
         }
     }
 
-    private static async Task CopyUntilEofAsync(Stream source, Stream destination, CancellationToken ct)
+    private static async Task CopyUntilEofAsync(
+        Stream source,
+        Stream destination,
+        CancellationToken ct,
+        Action onActivity)
     {
         var buffer = new byte[81920];
+
         while (true)
         {
-            var n = await source.ReadAsync(buffer.AsMemory(0, buffer.Length), ct).ConfigureAwait(false);
+            var n = await source
+                .ReadAsync(buffer.AsMemory(), ct)
+                .ConfigureAwait(false);
+
             if (n == 0)
                 return;
-            await destination.WriteAsync(buffer.AsMemory(0, n), ct).ConfigureAwait(false);
+
+            onActivity();
+
+            await destination
+                .WriteAsync(buffer.AsMemory(0, n), ct)
+                .ConfigureAwait(false);
+
             await destination.FlushAsync(ct).ConfigureAwait(false);
         }
     }

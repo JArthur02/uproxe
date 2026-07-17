@@ -195,13 +195,25 @@ public static class HttpProxyRequestParser
 
         if (hasTe)
         {
-            foreach (var coding in transferEncoding!.Split(',',
-                         StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+            var codings = transferEncoding!
+                .Split(
+                    ',',
+                    StringSplitOptions.TrimEntries |
+                    StringSplitOptions.RemoveEmptyEntries);
+
+            var chunkedCount = codings.Count(c =>
+                c.Equals("chunked", StringComparison.OrdinalIgnoreCase));
+
+            // For requests, chunked must occur exactly once and must be the final coding.
+            if (codings.Length == 0 ||
+                chunkedCount != 1 ||
+                !codings[^1].Equals("chunked", StringComparison.OrdinalIgnoreCase))
             {
-                if (coding.Equals("chunked", StringComparison.OrdinalIgnoreCase))
-                    return RequestBodyLengthKind.Chunked;
+                throw new HttpProxyParseException(
+                    $"Unsupported or invalid Transfer-Encoding: {transferEncoding}");
             }
-            throw new HttpProxyParseException($"Unsupported Transfer-Encoding: {transferEncoding}");
+
+            return RequestBodyLengthKind.Chunked;
         }
 
         if (hasCl)

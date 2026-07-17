@@ -744,6 +744,9 @@ public sealed class ChainControlForm : Form
     private async Task ApplyAndStartAsync(ProxyChainProfile profile, IReadOnlyList<PoolCandidate>? pool)
     {
         PersistActiveProfileId(profile.Id);
+
+        _manager.VerificationDestination = TestDestination();
+
         _gateway.HttpPort = _settings.ChainHttpPort;
         _gateway.SocksPort = _settings.ChainSocksPort;
 
