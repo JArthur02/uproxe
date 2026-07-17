@@ -47,7 +47,6 @@ public sealed class MainForm : Form
     private readonly Button _btnCheck = new() { Text = "Check", AutoSize = true };
     private readonly Button _btnStop = new() { Text = "Stop", AutoSize = true, Enabled = false };
     private readonly Button _btnExport = new() { Text = "Export", AutoSize = true };
-    private readonly Button _btnSettings = new() { Text = "Settings", AutoSize = true };
     private readonly Button _btnProxyChains = new() { Text = "Routing…", AutoSize = true };
     private readonly ToolStripStatusLabel _routingLabel = new()
     {
@@ -217,33 +216,16 @@ public sealed class MainForm : Form
             FlowDirection = FlowDirection.LeftToRight
         };
 
-        void AddGroup(string title, params Control[] controls)
+        // Plain action row — no group labels (they read as duplicate button names).
+        // Settings lives under Tools only.
+        foreach (var btn in new[] { _btnLoad, _btnScrape, _btnCheck, _btnStop, _btnProxyChains, _btnExport })
         {
-            var label = new Label
-            {
-                Text = title,
-                AutoSize = true,
-                ForeColor = Color.FromArgb(90, 90, 90),
-                Margin = new Padding(10, 8, 4, 0),
-                Font = new Font("Segoe UI Semibold", 8.25f)
-            };
-            if (_actionBar.Controls.Count == 0)
-                label.Margin = new Padding(2, 8, 4, 0);
-            _actionBar.Controls.Add(label);
-            foreach (var btn in controls)
-            {
-                btn.Margin = new Padding(2);
-                btn.Padding = new Padding(8, 4, 8, 4);
-                btn.AutoSize = true;
-                btn.MinimumSize = new Size(0, 30);
-                _actionBar.Controls.Add(btn);
-            }
+            btn.Margin = new Padding(2);
+            btn.Padding = new Padding(8, 4, 8, 4);
+            btn.AutoSize = true;
+            btn.MinimumSize = new Size(0, 30);
+            _actionBar.Controls.Add(btn);
         }
-
-        AddGroup("Data", _btnLoad, _btnScrape);
-        AddGroup("Check", _btnCheck, _btnStop);
-        AddGroup("Routing", _btnProxyChains);
-        AddGroup("Export", _btnExport, _btnSettings);
 
         _grid.Dock = DockStyle.Fill;
         _grid.AllowUserToAddRows = false;
@@ -448,9 +430,8 @@ public sealed class MainForm : Form
                 await _session.StopAsync();
         };
         _btnExport.Click += (_, _) => ExportResults();
-        _btnSettings.Click += (_, _) => OpenSettings();
         _btnProxyChains.Click += (_, _) => OpenProxyChains();
-        // Emergency Reset lives under Tools → Advanced (not the primary toolbar).
+        // Settings / Emergency Reset live under Tools (menu) only.
         _routing.Changed += () => _ui.Post(_ => RefreshRoutingChip(), null);
         FormClosing += (_, e) =>
         {
@@ -614,7 +595,6 @@ public sealed class MainForm : Form
         _btnScrape.Enabled = !busy;
         _btnCheck.Enabled = !busy;
         _btnExport.Enabled = !busy && _rows.Count > 0;
-        _btnSettings.Enabled = !busy;
         _btnProxyChains.Enabled = !busy;
         _btnStop.Enabled = busy;
         _httpRadio.Enabled = !busy;
@@ -958,7 +938,10 @@ public sealed class MainForm : Form
             UpsertCheckResult);
         form.ShowDialog(this);
         RefreshRoutingChip();
-        SetStatus(_routing.Summary);
+        if (_routing.Status == RoutingUiState.Phase.Off)
+            SetStatus("Ready.");
+        else
+            SetStatus("Proxy Chains closed — routing still active.");
     }
 
     private IReadOnlyList<ProxyCheckResult> GetSessionResults()

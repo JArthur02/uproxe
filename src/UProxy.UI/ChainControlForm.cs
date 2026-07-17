@@ -59,7 +59,6 @@ public sealed class ChainControlForm : Form
     private readonly Button _btnStart = new() { Text = "Start", AutoSize = true };
     private readonly Button _btnStop = new() { Text = "Stop", AutoSize = true };
     private readonly Button _btnRestore = new() { Text = "Restore Windows Proxy", AutoSize = true };
-    private readonly Button _btnExitIp = new() { Text = "Check Exit IP", AutoSize = true };
     private readonly Button _btnCopyHttp = new() { Text = "Copy HTTP", AutoSize = true };
     private readonly Button _btnCopySocks = new() { Text = "Copy SOCKS", AutoSize = true };
 
@@ -93,7 +92,6 @@ public sealed class ChainControlForm : Form
         IntegralHeight = false
     };
 
-    private Button? _btnStartStrict;
     private System.Windows.Forms.Timer? _liveTimer;
 
     private readonly BindingList<HopItem> _fixedItems = [];
@@ -135,8 +133,8 @@ public sealed class ChainControlForm : Form
         StartPosition = FormStartPosition.CenterParent;
         AutoScaleMode = AutoScaleMode.Dpi;
         AutoScaleDimensions = new SizeF(96F, 96F);
-        MinimumSize = new Size(820, 520);
-        ClientSize = new Size(880, 600);
+        MinimumSize = new Size(900, 560);
+        ClientSize = new Size(960, 640);
         Font = new Font("Segoe UI", 9f);
         BackColor = Color.White;
         ShowInTaskbar = false;
@@ -219,7 +217,6 @@ public sealed class ChainControlForm : Form
         StyleButton(_btnStart);
         StyleButton(_btnStop);
         StyleButton(_btnRestore);
-        StyleButton(_btnExitIp);
         StyleButton(_btnCopyHttp);
         StyleButton(_btnCopySocks);
         _btnStart.Font = new Font(Font, FontStyle.Bold);
@@ -266,12 +263,12 @@ public sealed class ChainControlForm : Form
             Margin = new Padding(0, 6, 0, 0),
             Padding = new Padding(0)
         };
+        // Exit IP is verified automatically after Start; no separate checker button.
         headerBtns.Controls.Add(_btnStart);
         headerBtns.Controls.Add(_btnStop);
         headerBtns.Controls.Add(_btnCopyHttp);
         headerBtns.Controls.Add(_btnCopySocks);
         headerBtns.Controls.Add(_btnRestore);
-        headerBtns.Controls.Add(_btnExitIp);
         header.Controls.Add(headerBtns, 0, header.RowCount++);
 
         _tabs.TabPages.Add(BuildFixedTab());
@@ -298,44 +295,53 @@ public sealed class ChainControlForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 2,
-            RowCount = 3,
+            RowCount = 1,
             Padding = new Padding(8)
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, SideColumnWidth));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var left = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 3,
+            Margin = new Padding(0),
+            Padding = new Padding(0)
+        };
+        left.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        left.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         var side = BuildSidePanel();
         var addSession = MakeSideButton("Add from session");
         var paste = MakeSideButton("Paste ordered list");
         var remove = MakeSideButton("Remove");
-        var up = MakeSideButton("Up");
-        var down = MakeSideButton("Down");
-        var save = MakeSideButton("Save");
+        var up = MakeSideButton("Move up");
+        var down = MakeSideButton("Move down");
         var test = MakeSideButton("Test chain");
-        _btnStartStrict = MakeSideButton("Start Strict");
 
         addSession.Click += (_, _) => AddFixedFromSession();
         paste.Click += (_, _) => PasteFixedOrdered();
         remove.Click += (_, _) => RemoveSelectedFixed();
         up.Click += (_, _) => MoveFixed(-1);
         down.Click += (_, _) => MoveFixed(1);
-        save.Click += (_, _) => SaveFixedProfile();
         test.Click += async (_, _) => await TestFixedAsync();
-        _btnStartStrict.Click += async (_, _) => await StartStrictAsync();
 
-        side.Controls.AddRange([addSession, paste, remove, up, down, save, test, _btnStartStrict]);
+        side.Controls.AddRange([addSession, paste, remove, up, down, test]);
 
         var toolbar = BuildFixedProfileToolbar();
         var nameRow = BuildNameRow(_fixedName);
+        _fixedHops.Dock = DockStyle.Fill;
 
-        root.Controls.Add(toolbar, 0, 0);
-        root.Controls.Add(_fixedHops, 0, 1);
+        left.Controls.Add(toolbar, 0, 0);
+        left.Controls.Add(_fixedHops, 0, 1);
+        left.Controls.Add(nameRow, 0, 2);
+
+        root.Controls.Add(left, 0, 0);
         root.Controls.Add(side, 1, 0);
-        root.SetRowSpan(side, 3);
-        root.Controls.Add(nameRow, 0, 2);
 
         page.Controls.Add(root);
         return page;
@@ -349,7 +355,7 @@ public sealed class ChainControlForm : Form
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             WrapContents = true,
             FlowDirection = FlowDirection.LeftToRight,
-            Dock = DockStyle.Top,
+            Dock = DockStyle.Fill,
             Margin = new Padding(0, 0, 0, 6),
             Padding = new Padding(0)
         };
@@ -379,34 +385,41 @@ public sealed class ChainControlForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 2,
-            RowCount = 4,
+            RowCount = 1,
             Padding = new Padding(8)
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, SideColumnWidth));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var left = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 4,
+            Margin = new Padding(0),
+            Padding = new Padding(0)
+        };
+        left.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+        left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        left.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        left.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         var side = BuildSidePanel();
         var importAlive = MakeSideButton("Import from session");
         var paste = MakeSideButton("Paste candidates");
         var remove = MakeSideButton("Remove");
         var recheck = MakeSideButton("Recheck pool");
-        var refreshBadges = MakeSideButton("Refresh badges");
         var removeFailed = MakeSideButton("Remove failed");
-        var save = MakeSideButton("Save pool");
 
         importAlive.Click += (_, _) => ImportPoolFromSession();
         paste.Click += (_, _) => PastePool();
         remove.Click += (_, _) => RemoveSelectedPool();
         recheck.Click += async (_, _) => await RecheckPoolAsync();
-        refreshBadges.Click += (_, _) => RefreshPoolBadges();
         removeFailed.Click += (_, _) => RemoveFailedPoolItems();
-        save.Click += (_, _) => SavePool();
 
-        side.Controls.AddRange([importAlive, paste, remove, recheck, refreshBadges, removeFailed, save]);
+        side.Controls.AddRange([importAlive, paste, remove, recheck, removeFailed]);
 
         _poolEligibility.Items.AddRange([
             "Elite only (default)",
@@ -424,13 +437,15 @@ public sealed class ChainControlForm : Form
         var toolbar = BuildPoolProfileToolbar();
         var options = BuildPoolOptionsPanel();
         var nameRow = BuildNameRow(_poolName);
+        _poolCandidates.Dock = DockStyle.Fill;
 
-        root.Controls.Add(toolbar, 0, 0);
-        root.Controls.Add(_poolCandidates, 0, 1);
+        left.Controls.Add(toolbar, 0, 0);
+        left.Controls.Add(_poolCandidates, 0, 1);
+        left.Controls.Add(options, 0, 2);
+        left.Controls.Add(nameRow, 0, 3);
+
+        root.Controls.Add(left, 0, 0);
         root.Controls.Add(side, 1, 0);
-        root.SetRowSpan(side, 4);
-        root.Controls.Add(options, 0, 2);
-        root.Controls.Add(nameRow, 0, 3);
 
         page.Controls.Add(root);
         return page;
@@ -444,7 +459,7 @@ public sealed class ChainControlForm : Form
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             WrapContents = true,
             FlowDirection = FlowDirection.LeftToRight,
-            Dock = DockStyle.Top,
+            Dock = DockStyle.Fill,
             Margin = new Padding(0, 0, 0, 6),
             Padding = new Padding(0)
         };
@@ -478,7 +493,7 @@ public sealed class ChainControlForm : Form
     {
         var panel = new TableLayoutPanel
         {
-            Dock = DockStyle.Top,
+            Dock = DockStyle.Fill,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 2,
@@ -521,7 +536,7 @@ public sealed class ChainControlForm : Form
     }
 
     /// <summary>Fixed side-rail width so long action buttons are never clipped.</summary>
-    private const int SideColumnWidth = 200;
+    private const int SideColumnWidth = 228;
 
     private static FlowLayoutPanel BuildSidePanel() =>
         new()
@@ -538,7 +553,7 @@ public sealed class ChainControlForm : Form
     {
         var row = new TableLayoutPanel
         {
-            Dock = DockStyle.Top,
+            Dock = DockStyle.Fill,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 2,
@@ -574,7 +589,6 @@ public sealed class ChainControlForm : Form
         _btnStart.Click += async (_, _) => await StartFromHeaderAsync();
         _btnStop.Click += async (_, _) => await StopGatewayAsync();
         _btnRestore.Click += async (_, _) => await RestoreWindowsProxyAsync();
-        _btnExitIp.Click += async (_, _) => await CheckExitIpAsync();
         _btnCopyHttp.Click += (_, _) => CopyGatewayEndpoint(_gateway.HttpPort, "HTTP");
         _btnCopySocks.Click += (_, _) => CopyGatewayEndpoint(_gateway.SocksPort, "SOCKS");
         _tabs.SelectedIndexChanged += (_, _) => RefreshStatus();
@@ -753,8 +767,6 @@ public sealed class ChainControlForm : Form
         {
             _btnStart.Enabled = false;
             _btnStop.Enabled = false;
-            if (_btnStartStrict is not null)
-                _btnStartStrict.Enabled = false;
         }
         else
         {
@@ -845,13 +857,6 @@ public sealed class ChainControlForm : Form
 
             _btnStart.Enabled = canHeaderStart;
             _btnStop.Enabled = running;
-            _btnExitIp.Enabled = running && hops.Count > 0;
-
-            if (_btnStartStrict is not null)
-            {
-                _btnStartStrict.Text = running ? "Apply Strict" : "Start Strict";
-                _btnStartStrict.Enabled = canStrict;
-            }
         }
 
         if (!running && canHeaderStart)
@@ -2251,40 +2256,6 @@ public sealed class ChainControlForm : Form
         catch (Exception ex)
         {
             ShowBanner($"Restore failed: {ex.Message}", success: false);
-        }
-        finally
-        {
-            SetBusy(false);
-        }
-    }
-
-    private async Task CheckExitIpAsync()
-    {
-        if (!_gateway.IsRunning || _manager.GetActiveHops().Count == 0)
-        {
-            ShowBanner("Start a chain first.", success: false);
-            return;
-        }
-
-        SetBusy(true);
-        try
-        {
-            ValueTask<Stream> ConnectCallback(SocketsHttpConnectionContext ctx, CancellationToken ct)
-            {
-                var dest = new ChainDestination(ctx.DnsEndPoint.Host, ctx.DnsEndPoint.Port);
-                return new ValueTask<Stream>(_manager.ConnectAsync(dest, ct));
-            }
-
-            var ip = await ExitIpChecker.CheckAsync(
-                ConnectCallback,
-                _settings.ExitIpCheckUrl,
-                CancellationToken.None).ConfigureAwait(true);
-
-            ShowBanner($"Exit IP: {ip}", success: true);
-        }
-        catch (Exception ex)
-        {
-            ShowBanner($"Exit IP check failed: {ex.Message}", success: false);
         }
         finally
         {
