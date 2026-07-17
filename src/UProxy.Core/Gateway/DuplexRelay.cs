@@ -63,23 +63,37 @@ public static class DuplexRelay
         int bufferSize)
     {
         var buffer = new byte[bufferSize];
-        while (!sharedCts.IsCancellationRequested)
+        try
         {
-            var n = await source.ReadAsync(buffer.AsMemory(0, buffer.Length), sharedCts.Token)
-                .ConfigureAwait(false);
-
-            if (n == 0)
+            while (!sharedCts.IsCancellationRequested)
             {
-                // Half-close: finish writes toward the peer; do not cancel the opposite direction.
-                await CompleteWritesAsync(destination).ConfigureAwait(false);
-                return;
+                var n = await source.ReadAsync(buffer.AsMemory(0, buffer.Length), sharedCts.Token)
+                    .ConfigureAwait(false);
+
+                if (n == 0)
+                {
+                    // Half-close: finish writes toward the peer; do not cancel the opposite direction.
+                    await CompleteWritesAsync(destination).ConfigureAwait(false);
+                    return;
+                }
+
+                // Any successful read resets the shared idle timer for both directions.
+                sharedCts.CancelAfter(idleTimeout);
+
+                await destination.WriteAsync(buffer.AsMemory(0, n), sharedCts.Token).ConfigureAwait(false);
+                await destination.FlushAsync(sharedCts.Token).ConfigureAwait(false);
             }
-
-            // Any successful read resets the shared idle timer for both directions.
-            sharedCts.CancelAfter(idleTimeout);
-
-            await destination.WriteAsync(buffer.AsMemory(0, n), sharedCts.Token).ConfigureAwait(false);
-            await destination.FlushAsync(sharedCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException or SocketException)
+        {
+            // Transport fault: wake the opposite direction immediately instead of
+            // leaving it blocked until the shared idle timeout expires.
+            try { sharedCts.Cancel(); } catch { /* ignore */ }
+            throw;
         }
     }
 

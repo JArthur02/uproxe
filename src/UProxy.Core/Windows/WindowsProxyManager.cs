@@ -58,11 +58,7 @@ public sealed class WindowsProxyManager
 
         // Never overwrite an existing crash-recovery backup — that would lose the user's
         // original WinINET configuration if we re-enable while a prior backup is pending.
-        if (!HasPendingRestore)
-        {
-            var snapshot = Capture();
-            SaveBackup(snapshot);
-        }
+        SaveBackupIfNoPending(Capture());
 
         using var key = Registry.CurrentUser.OpenSubKey(InternetSettingsKey, writable: true)
                         ?? throw new InvalidOperationException("Cannot open Internet Settings registry key.");
@@ -118,6 +114,19 @@ public sealed class WindowsProxyManager
         if (!IsSupported || !HasPendingRestore)
             return false;
         Restore();
+        return true;
+    }
+
+    /// <summary>
+    /// Saves a crash-recovery backup only when none is pending.
+    /// Returns false when a prior backup already exists (so SetProxyOptIn will not overwrite it).
+    /// </summary>
+    public bool SaveBackupIfNoPending(WinInetProxySnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (HasPendingRestore)
+            return false;
+        SaveBackup(snapshot);
         return true;
     }
 

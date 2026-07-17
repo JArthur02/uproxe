@@ -1,6 +1,8 @@
 using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using UProxy.Core.Chaining;
+using UProxy.Core.Gateway;
 using UProxy.Core.Models;
 
 namespace UProxy.Core.Tests;
@@ -138,29 +140,144 @@ public class ReleaseBlockerFixTests
     }
 
     [Fact]
-    public void WindowsProxyManager_DoesNotOverwritePendingBackup()
+    public void WindowsProxyManager_SaveBackupIfNoPending_DoesNotOverwrite()
     {
-        if (!OperatingSystem.IsWindows())
-            return; // method is Windows-only
-
+#pragma warning disable CA1416 // SaveBackupIfNoPending is pure file I/O; exerciseable off Windows
         var dir = Path.Combine(Path.GetTempPath(), "uproxy-backup-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         var path = Path.Combine(dir, "wininet-proxy-backup.json");
         try
         {
             var mgr = new UProxy.Core.Windows.WindowsProxyManager(path);
-            File.WriteAllText(path, """{"proxyEnable":0,"proxyServer":"ORIGINAL","proxyOverride":"","autoConfigURL":"","capturedAtUtc":"2020-01-01T00:00:00Z"}""");
+            var original = new UProxy.Core.Windows.WinInetProxySnapshot
+            {
+                ProxyEnable = 0,
+                ProxyServer = "ORIGINAL",
+                ProxyOverride = "",
+                AutoConfigURL = "http://pac.example/proxy.pac",
+                CapturedAtUtc = DateTimeOffset.Parse("2020-01-01T00:00:00Z")
+            };
+            Assert.True(mgr.SaveBackupIfNoPending(original));
             Assert.True(mgr.HasPendingRestore);
             var before = File.ReadAllText(path);
-            // SetProxyOptIn would capture current registry — skip if it throws; just verify SaveBackup path
-            // by calling the public HasPendingRestore guard logic: second SaveBackup must not happen.
-            // We simulate by ensuring HasPendingRestore stays true and content unchanged after a no-op check.
-            Assert.Contains("ORIGINAL", before);
+
+            var overwritten = new UProxy.Core.Windows.WinInetProxySnapshot
+            {
+                ProxyEnable = 1,
+                ProxyServer = "SHOULD-NOT-WRITE",
+                CapturedAtUtc = DateTimeOffset.UtcNow
+            };
+            Assert.False(mgr.SaveBackupIfNoPending(overwritten));
             Assert.Equal(before, File.ReadAllText(path));
+            Assert.Contains("ORIGINAL", File.ReadAllText(path));
+            Assert.DoesNotContain("SHOULD-NOT-WRITE", File.ReadAllText(path));
         }
         finally
         {
             try { Directory.Delete(dir, true); } catch { /* ignore */ }
+        }
+#pragma warning restore CA1416
+    }
+
+    [Fact]
+    public async Task FastFailover_AllCoolingDown_DoesNotBypassCooldown()
+    {
+        var health = new ChainHealthTracker();
+        var manager = new ChainManager(new ChainDialer(TimeSpan.FromSeconds(2)), health);
+
+        var hopA = ProxyHop.FromParsed(new ParsedProxy("127.0.0.1", 19901, ProxyProtocol.Socks5));
+        var hopB = ProxyHop.FromParsed(new ParsedProxy("127.0.0.1", 19902, ProxyProtocol.Socks5));
+        health.MarkDown(hopA);
+        health.MarkDown(hopB);
+
+        manager.SwitchProfile(new ProxyChainProfile(
+            Guid.NewGuid(), "fast", ChainMode.FastFailover, new[] { hopA, hopB }, "pool"),
+            new[] { new PoolCandidate(hopA), new PoolCandidate(hopB) });
+
+        Assert.Empty(manager.GetActiveHops());
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            manager.ConnectAsync(new ChainDestination("127.0.0.1", 80), CancellationToken.None));
+        Assert.Contains("cooling down", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task DuplexRelay_TransportFault_EndsWithoutFullIdleWait()
+    {
+        await using var pair = await ConnectedPairForRelay.CreateAsync();
+        var idle = TimeSpan.FromSeconds(30);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var relay = DuplexRelay.RunAsync(pair.LeftA, pair.RightA, idle, CancellationToken.None);
+
+        // Deliver one byte so both directions are live, then abort one socket hard.
+        await pair.LeftB.WriteAsync(new byte[] { 1 });
+        await pair.LeftB.FlushAsync();
+        var buf = new byte[8];
+        Assert.Equal(1, await pair.RightB.ReadAsync(buf));
+
+        pair.LeftB.Socket.LingerState = new LingerOption(true, 0);
+        pair.LeftB.Socket.Close(); // RST — transport fault, not clean EOF
+
+        await relay.WaitAsync(TimeSpan.FromSeconds(5));
+        sw.Stop();
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(10),
+            $"Relay should abort on fault quickly, took {sw.Elapsed}");
+    }
+
+    private sealed class ConnectedPairForRelay : IAsyncDisposable
+    {
+        public required System.Net.Sockets.NetworkStream LeftA { get; init; }
+        public required System.Net.Sockets.NetworkStream LeftB { get; init; }
+        public required System.Net.Sockets.NetworkStream RightA { get; init; }
+        public required System.Net.Sockets.NetworkStream RightB { get; init; }
+        private System.Net.Sockets.TcpListener? _leftListener;
+        private System.Net.Sockets.TcpListener? _rightListener;
+        private System.Net.Sockets.TcpClient? _leftServer;
+        private System.Net.Sockets.TcpClient? _leftClient;
+        private System.Net.Sockets.TcpClient? _rightServer;
+        private System.Net.Sockets.TcpClient? _rightClient;
+
+        public static async Task<ConnectedPairForRelay> CreateAsync()
+        {
+            var leftListener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+            var rightListener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+            leftListener.Start();
+            rightListener.Start();
+
+            var leftClient = new System.Net.Sockets.TcpClient();
+            var rightClient = new System.Net.Sockets.TcpClient();
+            var leftAccept = leftListener.AcceptTcpClientAsync();
+            var rightAccept = rightListener.AcceptTcpClientAsync();
+            await leftClient.ConnectAsync((IPEndPoint)leftListener.LocalEndpoint);
+            await rightClient.ConnectAsync((IPEndPoint)rightListener.LocalEndpoint);
+            var leftServer = await leftAccept;
+            var rightServer = await rightAccept;
+
+            return new ConnectedPairForRelay
+            {
+                _leftListener = leftListener,
+                _rightListener = rightListener,
+                _leftServer = leftServer,
+                _leftClient = leftClient,
+                _rightServer = rightServer,
+                _rightClient = rightClient,
+                LeftA = leftServer.GetStream(),
+                LeftB = leftClient.GetStream(),
+                RightA = rightServer.GetStream(),
+                RightB = rightClient.GetStream(),
+            };
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            try { LeftB.Dispose(); } catch { /* ignore */ }
+            try { RightB.Dispose(); } catch { /* ignore */ }
+            _leftClient?.Dispose();
+            _rightClient?.Dispose();
+            _leftServer?.Dispose();
+            _rightServer?.Dispose();
+            _leftListener?.Stop();
+            _rightListener?.Stop();
+            await Task.CompletedTask;
         }
     }
 }

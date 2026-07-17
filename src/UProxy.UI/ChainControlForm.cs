@@ -669,7 +669,10 @@ public sealed class ChainControlForm : Form
             return;
         }
 
-        UseWaitCursor = true;
+        using var cts = new CancellationTokenSource();
+        using var progress = new PrivacyPairProgressDialog(cts);
+        progress.Show(this);
+        Enabled = false;
         try
         {
             var dest = TestDestination();
@@ -687,7 +690,10 @@ public sealed class ChainControlForm : Form
                 health: _manager.Health,
                 timeBudget: TimeSpan.FromSeconds(45),
                 maxConcurrency: 4,
-                cancellationToken: CancellationToken.None).ConfigureAwait(true);
+                cancellationToken: cts.Token).ConfigureAwait(true);
+
+            if (cts.IsCancellationRequested)
+                return;
 
             if (chosen is null)
             {
@@ -720,13 +726,17 @@ public sealed class ChainControlForm : Form
 
             await ApplyAndStartAsync(profile, candidates).ConfigureAwait(true);
         }
+        catch (OperationCanceledException)
+        {
+            // User cancelled or budget cancelled the token.
+        }
         catch (Exception ex)
         {
             MessageBox.Show(this, ex.Message, "Privacy 2-hop", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
         {
-            UseWaitCursor = false;
+            Enabled = true;
             RefreshStatus();
         }
     }
@@ -993,6 +1003,61 @@ public sealed class ChainControlForm : Form
             var meta = c.Country is { Length: > 0 } ? $"  [{c.Country}]" : "";
             var lat = c.LatencyMs is int ms ? $"  {ms}ms" : "";
             return $"{c.Hop.Kind}  {c.Hop.Endpoint}{meta}{lat}";
+        }
+    }
+
+    private sealed class PrivacyPairProgressDialog : Form
+    {
+        public PrivacyPairProgressDialog(CancellationTokenSource cts)
+        {
+            Text = "Privacy 2-hop";
+            StartPosition = FormStartPosition.CenterParent;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            ShowInTaskbar = false;
+            AutoScaleMode = AutoScaleMode.Dpi;
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            ClientSize = new Size(360, 110);
+            Font = new Font("Segoe UI", 9f);
+
+            var label = new Label
+            {
+                Text = "Searching for a compatible entry→exit pair…\n(up to 45 seconds)",
+                AutoSize = false,
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Padding = new Padding(12, 8, 12, 0)
+            };
+            var cancel = new Button
+            {
+                Text = "Cancel",
+                AutoSize = true,
+                Padding = new Padding(16, 6, 16, 6),
+                MinimumSize = new Size(88, 32),
+                Dock = DockStyle.Right,
+                Margin = new Padding(0, 8, 12, 12)
+            };
+            cancel.Click += (_, _) =>
+            {
+                cancel.Enabled = false;
+                cts.Cancel();
+            };
+            CancelButton = cancel;
+            FormClosing += (_, _) =>
+            {
+                try { cts.Cancel(); } catch { /* ignore */ }
+            };
+
+            var buttons = new Panel
+            {
+                Dock = DockStyle.Bottom,
+                Height = 48
+            };
+            buttons.Controls.Add(cancel);
+
+            Controls.Add(label);
+            Controls.Add(buttons);
         }
     }
 

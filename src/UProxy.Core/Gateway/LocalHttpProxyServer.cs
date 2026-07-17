@@ -254,6 +254,15 @@ public sealed class LocalHttpProxyServer : IAsyncDisposable
 
             var forward = HttpProxyRequestParser.BuildOriginFormRequest(request);
             await remoteStream.WriteAsync(forward, ct).ConfigureAwait(false);
+            await remoteStream.FlushAsync(ct).ConfigureAwait(false);
+
+            // Break Expect: 100-continue deadlock — compliant clients wait for 100 before
+            // sending the body; Expect is already stripped from the origin-form request.
+            if (HttpProxyRequestParser.HasExpectContinue(request) &&
+                bodyKind is RequestBodyLengthKind.ContentLength or RequestBodyLengthKind.Chunked)
+            {
+                await WriteContinue100Async(clientStream, ct).ConfigureAwait(false);
+            }
 
             switch (bodyKind)
             {
@@ -388,6 +397,14 @@ public sealed class LocalHttpProxyServer : IAsyncDisposable
     {
         var bytes = Encoding.ASCII.GetBytes(lineWithoutCrlf + "\r\n");
         await stream.WriteAsync(bytes, ct).ConfigureAwait(false);
+    }
+
+    private static async Task WriteContinue100Async(Stream stream, CancellationToken ct)
+    {
+        // Interim response must not advertise Connection: close.
+        var bytes = Encoding.ASCII.GetBytes("HTTP/1.1 100 Continue\r\n\r\n");
+        await stream.WriteAsync(bytes, ct).ConfigureAwait(false);
+        await stream.FlushAsync(ct).ConfigureAwait(false);
     }
 
     private static async Task WriteSimpleResponseAsync(
