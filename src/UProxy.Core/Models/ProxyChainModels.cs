@@ -93,3 +93,52 @@ public sealed record ProxyChainProfile(
     ChainMode Mode,
     IReadOnlyList<ProxyHop> Hops,
     string? CandidatePoolId = null);
+
+/// <summary>High-level runtime status for an active chain/pool.</summary>
+public enum ChainRuntimeState
+{
+    Stopped = 0,
+    Healthy = 1,
+    Degraded = 2,
+    Switching = 3
+}
+
+/// <summary>Live health counters for a proxy (stable key: host|port|kind).</summary>
+public sealed record ProxyHealthRecord(
+    string Key,
+    int SuccessCount,
+    int FailureCount,
+    double SuccessRate,
+    bool IsHealthy,
+    bool IsInCooldown,
+    bool NeedsVerification,
+    int CooldownLevel,
+    DateTimeOffset? LastSuccessUtc,
+    DateTimeOffset? LastFailureUtc,
+    DateTimeOffset? CooldownUntilUtc);
+
+/// <summary>JSON-serializable snapshot of per-proxy health for persistence.</summary>
+public sealed record ProxyHealthState(
+    string Key,
+    int SuccessCount = 0,
+    int FailureCount = 0,
+    int CooldownLevel = 0,
+    bool NeedsVerification = false,
+    DateTimeOffset? LastSuccessUtc = null,
+    DateTimeOffset? LastFailureUtc = null,
+    DateTimeOffset? CooldownUntilUtc = null,
+    List<DateTimeOffset>? RecentFailureUtc = null);
+
+/// <summary>Pool entry used by selection policies (FastFailover / AutoTwoHop).</summary>
+public sealed record PoolCandidate(
+    ProxyHop Hop,
+    string? Country = null,
+    int? LatencyMs = null,
+    double? SuccessRate = null,
+    DateTimeOffset? LastChecked = null);
+
+/// <summary>Result of testing whether two hops can form a working edge.</summary>
+public sealed record TwoHopEdgeResult(
+    bool Compatible,
+    double Reliability = 1.0,
+    int E2eLatencyMs = int.MaxValue);
