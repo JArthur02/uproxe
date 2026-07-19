@@ -65,7 +65,7 @@ public class ChainDialerTests
     }
 
     [Fact]
-    public async Task Mixed_HttpConnect_ThenSocks5()
+    public async Task Mixed_HttpConnect_ThenSocks5_RejectedByHopOrderRule()
     {
         await using var echo = new FakeProxyServers.EchoHttpServer("mixed-hs");
         await using var socks = new FakeProxyServers.FakeSocks5Proxy();
@@ -77,10 +77,32 @@ public class ChainDialerTests
             ProxyHop.FromParsed(new ParsedProxy("127.0.0.1", socks.Port, ProxyProtocol.Socks5), ProxyKind.Socks5)
         };
 
-        await using var stream = await dialer.ConnectAsync(
-            hops, new ChainDestination("127.0.0.1", echo.Port), CancellationToken.None);
-        await WriteGetAsync(stream);
-        Assert.Contains("mixed-hs", await ReadTextAsync(stream));
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
+            dialer.ConnectAsync(hops, new ChainDestination("127.0.0.1", echo.Port), CancellationToken.None));
+        Assert.Contains("HTTP proxy server must be the last one in the chain", ex.Message);
+    }
+
+    [Fact]
+    public void ValidateHopOrder_AllowsHttpAsFinalHop()
+    {
+        var hops = new[]
+        {
+            ProxyHop.FromParsed(new ParsedProxy("127.0.0.1", 1080, ProxyProtocol.Socks5), ProxyKind.Socks5),
+            ProxyHop.FromParsed(new ParsedProxy("127.0.0.1", 8080, ProxyProtocol.Http), ProxyKind.Http)
+        };
+        ChainDialer.ValidateHopOrder(hops);
+    }
+
+    [Fact]
+    public void ValidateHopOrder_RejectsHttpBeforeAnotherHop()
+    {
+        var hops = new[]
+        {
+            ProxyHop.FromParsed(new ParsedProxy("127.0.0.1", 8080, ProxyProtocol.Http), ProxyKind.Http),
+            ProxyHop.FromParsed(new ParsedProxy("127.0.0.1", 1080, ProxyProtocol.Socks5), ProxyKind.Socks5)
+        };
+        var ex = Assert.Throws<ArgumentException>(() => ChainDialer.ValidateHopOrder(hops));
+        Assert.Contains("HTTP proxy server must be the last one in the chain", ex.Message);
     }
 
     [Fact]

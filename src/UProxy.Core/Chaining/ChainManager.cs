@@ -46,6 +46,9 @@ public sealed class ChainManager
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(profile.Hops);
 
+        if (profile.Mode == ChainMode.StrictMultiHop && profile.Hops.Count > 1)
+            ChainDialer.ValidateHopOrder(profile.Hops);
+
         lock (_gate)
         {
             _state = ChainRuntimeState.Switching;
