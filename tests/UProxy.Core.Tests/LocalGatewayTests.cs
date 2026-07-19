@@ -94,13 +94,13 @@ public class LocalGatewayTests
     public async Task HttpConnect_ThroughTwoHops()
     {
         await using var echo = new FakeProxyServers.EchoHttpServer("http-2hop");
-        await using var hop2 = new FakeProxyServers.FakeSocks5Proxy();
-        await using var hop1 = new FakeProxyServers.FakeHttpConnectProxy();
+        await using var hop2 = new FakeProxyServers.FakeHttpConnectProxy();
+        await using var hop1 = new FakeProxyServers.FakeSocks5Proxy();
         var dialer = new ChainDialer(TimeSpan.FromSeconds(10));
         var hops = new[]
         {
-            ProxyHop.FromParsed(new ParsedProxy("127.0.0.1", hop1.Port, ProxyProtocol.Http), ProxyKind.Http),
-            ProxyHop.FromParsed(new ParsedProxy("127.0.0.1", hop2.Port, ProxyProtocol.Socks5), ProxyKind.Socks5)
+            ProxyHop.FromParsed(new ParsedProxy("127.0.0.1", hop1.Port, ProxyProtocol.Socks5), ProxyKind.Socks5),
+            ProxyHop.FromParsed(new ParsedProxy("127.0.0.1", hop2.Port, ProxyProtocol.Http), ProxyKind.Http)
         };
         var connector = new ChainDialerConnector(dialer, hops);
 

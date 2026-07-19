@@ -34,6 +34,7 @@ public sealed class ChainDialer
             throw new ArgumentException("At least one hop is required.", nameof(hops));
         if (hops.Count > MaxHops)
             throw new ArgumentException($"Chain length cannot exceed {MaxHops}.", nameof(hops));
+        ValidateHopOrder(hops);
         if (string.IsNullOrWhiteSpace(destination.Host))
             throw new ArgumentException("Destination host is required.", nameof(destination));
         if (destination.Port is < 1 or > 65535)
@@ -287,5 +288,23 @@ public sealed class ChainDialer
         return host.Contains(':') && !host.StartsWith('[')
             ? $"[{host}]:{port}"
             : $"{host}:{port}";
+    }
+
+    /// <summary>
+    /// Proxifier rule: an HTTP CONNECT hop must be the final proxy in the chain.
+    /// See proxe-code <c>extracted/proxy-chain/MAPPING.md</c> (FUN_140068a50).
+    /// </summary>
+    public static void ValidateHopOrder(IReadOnlyList<ProxyHop> hops)
+    {
+        ArgumentNullException.ThrowIfNull(hops);
+        for (var i = 0; i < hops.Count - 1; i++)
+        {
+            if (hops[i].Kind == ProxyKind.Http)
+            {
+                throw new ArgumentException(
+                    "HTTP proxy server must be the last one in the chain.",
+                    nameof(hops));
+            }
+        }
     }
 }
