@@ -47,9 +47,7 @@ public sealed class MainForm : Form
     private readonly Button _btnCheck = new() { Text = "Check", AutoSize = true };
     private readonly Button _btnStop = new() { Text = "Stop", AutoSize = true, Enabled = false };
     private readonly Button _btnExport = new() { Text = "Export", AutoSize = true };
-    private readonly Button _btnSettings = new() { Text = "Settings", AutoSize = true };
     private readonly Button _btnProxyChains = new() { Text = "Routing…", AutoSize = true };
-    private readonly Button _btnResetProxy = new() { Text = "Emergency Reset", AutoSize = true };
     private readonly ToolStripStatusLabel _routingLabel = new()
     {
         BorderSides = ToolStripStatusLabelBorderSides.Left,
@@ -217,11 +215,10 @@ public sealed class MainForm : Form
             Padding = new Padding(8, 4, 8, 4),
             FlowDirection = FlowDirection.LeftToRight
         };
-        foreach (var btn in new[]
-                 {
-                     _btnLoad, _btnScrape, _btnCheck, _btnStop, _btnExport, _btnSettings,
-                     _btnProxyChains, _btnResetProxy
-                 })
+
+        // Plain action row — no group labels (they read as duplicate button names).
+        // Settings lives under Tools only.
+        foreach (var btn in new[] { _btnLoad, _btnScrape, _btnCheck, _btnStop, _btnProxyChains, _btnExport })
         {
             btn.Margin = new Padding(2);
             btn.Padding = new Padding(8, 4, 8, 4);
@@ -433,9 +430,8 @@ public sealed class MainForm : Form
                 await _session.StopAsync();
         };
         _btnExport.Click += (_, _) => ExportResults();
-        _btnSettings.Click += (_, _) => OpenSettings();
         _btnProxyChains.Click += (_, _) => OpenProxyChains();
-        _btnResetProxy.Click += (_, _) => EmergencyReset();
+        // Settings / Emergency Reset live under Tools (menu) only.
         _routing.Changed += () => _ui.Post(_ => RefreshRoutingChip(), null);
         FormClosing += (_, e) =>
         {
@@ -599,9 +595,7 @@ public sealed class MainForm : Form
         _btnScrape.Enabled = !busy;
         _btnCheck.Enabled = !busy;
         _btnExport.Enabled = !busy && _rows.Count > 0;
-        _btnSettings.Enabled = !busy;
         _btnProxyChains.Enabled = !busy;
-        _btnResetProxy.Enabled = !busy;
         _btnStop.Enabled = busy;
         _httpRadio.Enabled = !busy;
         _socksRadio.Enabled = !busy;
@@ -627,32 +621,38 @@ public sealed class MainForm : Form
 
     private void UpdateTitle(int? proxies = null, int? alive = null)
     {
-        var p = proxies ?? _session?.Proxies.Count ?? 0;
-        var aliveCount = alive ?? _rows.Count(r => r.Source is { IsAlive: true });
-        Text = $"μProxy Tool 2.0 — {p} loaded / {aliveCount} alive";
+        _ = proxies;
+        _ = alive;
+        Text = "μProxy Tool 2.0";
+        RefreshCountsLabel();
+    }
+
+    private void RefreshCountsLabel()
+    {
+        var loaded = _session?.Proxies.Count ?? 0;
+        var alive = _rows.Count(r => r.Source is { IsAlive: true });
+        var failed = _rows.Count(r => r.Source is { IsAlive: false });
+        _countsLabel.Text = $"Loaded {loaded}  •  Alive {alive}  •  Failed {failed}";
     }
 
     private void SetSystemProxyOptIn()
     {
         if (!_proxyManager.IsSupported)
         {
-            MessageBox.Show("System proxy is only available on Windows.", "μProxy Tool",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            SetStatus("System proxy is only available on Windows.");
             return;
         }
 
         if (_grid.CurrentRow?.DataBoundItem is not ResultRow row || row.Source is null)
         {
-            MessageBox.Show("Select a checked proxy result in the list first.", "μProxy Tool",
-                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            SetStatus("Select a checked HTTP/HTTPS proxy result first.");
             return;
         }
 
         var source = row.Source;
         if (!source.IsAlive)
         {
-            MessageBox.Show("That result is not alive. Check proxies again and select a live HTTP/HTTPS row.",
-                "μProxy Tool", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            SetStatus("That result is not alive. Check proxies again and select a live HTTP/HTTPS row.");
             return;
         }
 
@@ -813,8 +813,7 @@ public sealed class MainForm : Form
 
         if (_session!.Proxies.Count == 0)
         {
-            MessageBox.Show("Please load or scrape proxies first.", "μProxy Tool",
-                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            SetStatus("Load or scrape proxies before checking.");
             return;
         }
 
@@ -831,8 +830,7 @@ public sealed class MainForm : Form
         try
         {
             await _session.StartCheckAsync(_socksRadio.Checked);
-            MessageBox.Show($"Proxy checking {_session.Status}!", "μProxy Tool",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            SetStatus($"Proxy checking {_session.Status}.");
         }
         catch (Exception ex)
         {
@@ -864,8 +862,7 @@ public sealed class MainForm : Form
         var results = _session!.Results.ToList();
         if (results.Count == 0)
         {
-            MessageBox.Show("No checked proxies to export.", "Export",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            SetStatus("No checked proxies to export.");
             return;
         }
 
@@ -927,7 +924,7 @@ public sealed class MainForm : Form
 
         using var form = new ChainControlForm(
             _settings,
-            GetAliveResults,
+            GetSessionResults,
             _chainGateway,
             _chainManager,
             _routing,
@@ -937,18 +934,63 @@ public sealed class MainForm : Form
             _credentialStore,
             _settingsPath,
             seedFixed,
-            seedPool);
+            seedPool,
+            UpsertCheckResult);
         form.ShowDialog(this);
         RefreshRoutingChip();
-        SetStatus(_routing.Summary);
+        if (_routing.Status == RoutingUiState.Phase.Off)
+            SetStatus("Ready.");
+        else
+            SetStatus("Proxy Chains closed — routing still active.");
     }
 
-    private IReadOnlyList<ProxyCheckResult> GetAliveResults()
+    private IReadOnlyList<ProxyCheckResult> GetSessionResults()
     {
         return _rows
-            .Where(r => r.Source is { IsAlive: true })
+            .Where(r => r.Source is not null)
             .Select(r => r.Source!)
             .ToList();
+    }
+
+    private void UpsertCheckResult(ProxyCheckResult result)
+    {
+        EnsureSession();
+        var endpoint = result.Proxy.Endpoint;
+        for (var i = 0; i < _rows.Count; i++)
+        {
+            var row = _rows[i];
+            if (row.Source is null)
+                continue;
+            if (!string.Equals(row.Source.Proxy.Endpoint, endpoint, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(row.Proxy, endpoint, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            row.Proxy = result.Proxy.Endpoint;
+            row.Country = result.Country;
+            row.Anonymity = result.Anonymity.ToString();
+            row.Protocol = FormatProtocol(result.ConfirmedProtocol);
+            row.ConnectMs = result.ConnectMs ?? 0;
+            row.LatencyMs = result.LatencyMs;
+            row.Auth = FormatAuthShort(result.AuthMethod);
+            row.Detail = result.IsAlive ? "" : FailureMessages.Describe(result.Failure, result.ErrorMessage);
+            row.AnonLevel = result.Anonymity;
+            row.Source = result;
+            _rows.NotifyItemChanged(i);
+
+            var existing = _session!.Results.FindIndex(r =>
+                string.Equals(r.Proxy.Endpoint, endpoint, StringComparison.OrdinalIgnoreCase));
+            if (existing >= 0)
+                _session.Results[existing] = result;
+            else
+                _session.Results.Add(result);
+
+            RefreshCountsLabel();
+            return;
+        }
+
+        _session!.Results.Add(result);
+        AddResult(result);
+        RefreshCountsLabel();
     }
 
     private IReadOnlyList<ProxyCheckResult> GetSelectedAliveResults()
@@ -972,29 +1014,22 @@ public sealed class MainForm : Form
             {
                 _chainGateway.StopAsync().GetAwaiter().GetResult();
                 _routing.SetOff();
-                MessageBox.Show("Chain gateway stopped and Windows proxy restored.", "μProxy Tool",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
                 RefreshRoutingChip();
-                SetStatus("Routing Off (gateway stopped).");
+                SetStatus("Routing Off — chain gateway stopped and Windows proxy restored.");
                 return;
             }
 
             if (_proxyManager.HasPendingRestore)
             {
                 _proxyManager.Restore();
-                MessageBox.Show("Original Windows proxy settings restored.", "μProxy Tool",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                RefreshRoutingChip();
+                SetStatus("Original Windows proxy settings restored.");
             }
             else
             {
-                MessageBox.Show(
-                    "No Windows proxy backup is pending. Nothing to restore.",
-                    "μProxy Tool",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
+                RefreshRoutingChip();
+                SetStatus("No Windows proxy backup is pending.");
             }
-            RefreshRoutingChip();
-            SetStatus("System proxy reset.");
         }
         catch (Exception ex)
         {
@@ -1026,6 +1061,6 @@ public sealed class MainForm : Form
         public string Auth { get; set; } = "";
         public string Detail { get; set; } = "";
         public AnonymityLevel AnonLevel { get; set; } = AnonymityLevel.Unknown;
-        public ProxyCheckResult? Source { get; init; }
+        public ProxyCheckResult? Source { get; set; }
     }
 }
