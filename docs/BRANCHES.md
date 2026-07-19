@@ -18,11 +18,9 @@ How branches in [JArthur02/uproxe](https://github.com/JArthur02/uproxe) are orga
 | `fyer-clone` | Proxifier v4.14 binary drop (reference only; not built by solution) |
 | `cursor/publish-win-x64-zip-35cc` | Immutable pre-chains Win x64 ZIP snapshot |
 
-## Tier 3 — open work (keep until merged)
+## Tier 3 — open work
 
-| Branch | PR | Notes |
-|--------|-----|-------|
-| `codex/investigate-proxychains-implementation` | [#16](https://github.com/JArthur02/uproxe/pull/16) (open) | proxychains-ng config export |
+No feature branches currently open. New work branches off `cursor/v3-proxychains`.
 
 ## Tier 4 — safe to delete
 
@@ -43,6 +41,7 @@ Branches whose commits are already in `cursor/v3-proxychains` (0 unique commits 
 - `cursor/uproxy-net10-rewrite-b2b1` — #1, #7 merged
 - `cursor/document-no-dev-env-53f2` — #5 superseded (dev env now documented in README)
 - `cursor/fix-toolbar-chain-layout-f851` — #30 merged
+- `codex/investigate-proxychains-implementation` — #16 closed, landed as #31
 
 ## Naming conventions
 
@@ -69,4 +68,4 @@ gh api repos/JArthur02/uproxe/compare/cursor/v3-proxychains...BRANCH --jq '.ahea
 git push origin --delete BRANCH
 ```
 
-_Last updated: 2026-07-19 (post #30 toolbar layout merge)_
+_Last updated: 2026-07-19 (post #31 proxychains-ng export)_
