@@ -110,6 +110,24 @@ Proxy chaining is **not Tor**. The first hop sees your source IP; the last hop s
 - **Embedded auth**: HTTP Basic (`Proxy-Authorization`), SOCKS5 user/pass, SOCKS4 userid; NTLM is detected on 407 but not sent by default (privacy).
 - **User-Agent presets**: selectable in Settings (μProxy default, Chrome, Firefox, Internet Explorer 11) for judges/targets that block non-browser agents.
 
+## Export
+
+**Export** saves the filtered result list as plain text, CSV, JSON, or a **proxychains-ng** `*.conf` file.
+
+### Proxychains-ng export
+
+Choose **Proxychains config (`*.conf`)** in the save dialog. The generated proxychains-ng 4.x configuration uses `dynamic_chain` (skip unavailable entries), enables proxied DNS, and lists checked proxies in `[ProxyList]`. HTTPS-capable HTTP proxies are written as `http` (proxychains uses HTTP `CONNECT`); dual SOCKS4/5 proxies are written as `socks5`.
+
+Credentials are excluded by default. Check **Include credentials** to opt in. Proxychains tokens cannot be empty or contain whitespace; the exporter rejects invalid credentials rather than writing a broken config.
+
+On Linux, BSD, or macOS:
+
+```bash
+proxychains4 -f proxies.conf curl https://ifconfig.me
+```
+
+Proxychains only intercepts supported TCP calls in dynamically linked programs; it does not proxy UDP or ICMP.
+
 ## Secret scanning (TruffleHog)
 
 Proxy lists — especially authenticated ones (`user:pass@host:port`) and pasted blobs — occasionally carry real API keys or tokens. **Tools → Scan for secrets (TruffleHog)…** runs [TruffleHog](https://github.com/trufflesecurity/trufflehog) so you can catch leaked credentials before exporting or sharing a list.
