@@ -14,6 +14,8 @@ Product version remains **2.x** until MVP acceptance on Windows; this branch shi
 
 Active development branch: `cursor/v3-proxychains`. Immutable 2.0 ZIP snapshot (pre-chains): `cursor/publish-win-x64-zip-35cc`.
 
+See **[docs/BRANCHES.md](docs/BRANCHES.md)** for the full branch taxonomy, open work, and cleanup policy.
+
 Legacy 1.81 binary (`tool.exe`) remains in the repo for reference. Unused package files (`check.ini`, `Ionic.Zip.dll`, `all.js`, `assembly.txt`) are not used by 2.0.
 
 ## Requirements
