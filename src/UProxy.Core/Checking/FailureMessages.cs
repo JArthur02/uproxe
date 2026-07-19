@@ -31,6 +31,10 @@ public static class FailureMessages
                 "Connection closed unexpectedly or returned an empty response.",
             FailureReason.Cancelled => "Cancelled.",
             FailureReason.Timeout => "Timed out waiting for the proxy or target.",
+            FailureReason.TargetUnreachableThroughProxy =>
+                "Connected to the proxy, but it could not reach the target host. The proxy may still work for other destinations.",
+            FailureReason.HttpsConnectForbidden =>
+                "The proxy refused the HTTPS CONNECT tunnel. It may forbid CONNECT to this port (e.g. Squid SSL_ports or Microsoft ISA tunnel-port policy).",
             FailureReason.UnknownError => "Unexpected error.",
             _ => reason.ToString()
         };

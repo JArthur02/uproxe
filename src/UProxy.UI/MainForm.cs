@@ -1,9 +1,12 @@
 using System.ComponentModel;
+using UProxy.Core.Chaining;
 using UProxy.Core.Checking;
 using UProxy.Core.Config;
 using UProxy.Core.Exporting;
+using UProxy.Core.Gateway;
 using UProxy.Core.GeoIp;
 using UProxy.Core.Models;
+using UProxy.Core.Persistence;
 using UProxy.Core.Scraping;
 using UProxy.Core.Sessions;
 using UProxy.Core.Windows;
@@ -19,6 +22,13 @@ public sealed class MainForm : Form
     private WorkSession? _session;
     private IGeoIpResolver _geoIp = NullGeoIpResolver.Instance;
     private readonly WindowsProxyManager _proxyManager = new();
+    private readonly ChainGatewayHost _chainGateway = new();
+    private readonly ChainManager _chainManager = new();
+    private readonly RoutingUiState _routing = new();
+    private readonly AppDataLayout _appData;
+    private readonly ProtectedCredentialStore _credentialStore;
+    private readonly ChainProfileStore _chainProfileStore;
+    private readonly PoolStore _poolStore;
     private readonly SynchronizationContext _ui;
 
     private readonly BufferedDataGridView _grid = new();
@@ -31,51 +41,121 @@ public sealed class MainForm : Form
     private readonly RadioButton _socksRadio = new() { Text = "SOCKS", AutoSize = true };
     private readonly NumericUpDown _concurrency = new() { Minimum = 1, Maximum = 256, Value = 48, Width = 60 };
     private readonly NumericUpDown _timeoutSec = new() { Minimum = 1, Maximum = 120, Value = 10, Width = 60 };
-    private readonly TextBox _judgeBox = new() { Width = 280 };
-    private readonly Button _btnLoad = new() { Text = "Load", Width = 80 };
-    private readonly Button _btnScrape = new() { Text = "Scrape", Width = 80 };
-    private readonly Button _btnCheck = new() { Text = "Check", Width = 80 };
-    private readonly Button _btnStop = new() { Text = "Stop", Width = 80, Enabled = false };
-    private readonly Button _btnExport = new() { Text = "Export", Width = 80 };
-    private readonly Button _btnSettings = new() { Text = "Settings", Width = 80 };
-    private readonly Button _btnSetProxy = new() { Text = "Set System Proxy…", AutoSize = true };
+    private readonly TextBox _judgeBox = new() { MinimumSize = new Size(160, 0), Width = 220 };
+    private readonly Button _btnLoad = new() { Text = "Load", AutoSize = true };
+    private readonly Button _btnScrape = new() { Text = "Scrape", AutoSize = true };
+    private readonly Button _btnCheck = new() { Text = "Check", AutoSize = true };
+    private readonly Button _btnStop = new() { Text = "Stop", AutoSize = true, Enabled = false };
+    private readonly Button _btnExport = new() { Text = "Export", AutoSize = true };
+    private readonly Button _btnSettings = new() { Text = "Settings", AutoSize = true };
+    private readonly Button _btnProxyChains = new() { Text = "Routing…", AutoSize = true };
     private readonly Button _btnResetProxy = new() { Text = "Emergency Reset", AutoSize = true };
-    private readonly Label _title = new();
+    private readonly ToolStripStatusLabel _routingLabel = new()
+    {
+        BorderSides = ToolStripStatusLabelBorderSides.Left,
+        BorderStyle = Border3DStyle.Etched,
+        Text = "Routing: Off"
+    };
+    private FlowLayoutPanel? _topBar;
+    private FlowLayoutPanel? _actionBar;
 
     public MainForm()
     {
         _ui = SynchronizationContext.Current ?? new SynchronizationContext();
-        _appDirectory = AppContext.BaseDirectory;
+        _appDirectory = ResolveAppDirectory();
         _settingsPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "uProxyTool",
             "settings.json");
 
+        // Design for 96 DPI; WinForms scales controls when PerMonitorV2 kicks in.
+        AutoScaleMode = AutoScaleMode.Dpi;
+        AutoScaleDimensions = new SizeF(96F, 96F);
+
         _settings = AppSettings.Load(_settingsPath);
+        _appData = new AppDataLayout();
+        _appData.EnsureDirectories();
+        _credentialStore = new ProtectedCredentialStore(_appData);
+        _chainProfileStore = new ChainProfileStore(_appData, _credentialStore);
+        _poolStore = new PoolStore(_appData, _credentialStore);
+        _chainGateway.HttpPort = _settings.ChainHttpPort;
+        _chainGateway.SocksPort = _settings.ChainSocksPort;
         ResolvePaths();
         ApplySettingsToUi();
         InitGeoIp();
         BuildUi();
+        RestoreWindowPlacement();
         WireEvents();
         UpdateTitle();
+        ReportGeoIpStatus();
+    }
+
+    /// <summary>
+    /// Directory that holds the shipped <c>Data/</c> folder. For single-file publish this is the
+    /// folder containing the .exe (not a temp extract dir), so GeoIP/sources stay findable after moves.
+    /// </summary>
+    private static string ResolveAppDirectory()
+    {
+        try
+        {
+            var exe = Environment.ProcessPath;
+            if (!string.IsNullOrEmpty(exe))
+            {
+                var dir = Path.GetDirectoryName(exe);
+                if (!string.IsNullOrEmpty(dir) && Directory.Exists(Path.Combine(dir, "Data")))
+                    return dir;
+            }
+        }
+        catch { /* fall through */ }
+
+        return AppContext.BaseDirectory;
     }
 
     private void ResolvePaths()
     {
-        _settings.HttpSourcesPath = MakeAbsolute(_settings.HttpSourcesPath);
-        _settings.SocksSourcesPath = MakeAbsolute(_settings.SocksSourcesPath);
-        _settings.GeoIpDatabasePath = MakeAbsolute(_settings.GeoIpDatabasePath);
+        _settings.HttpSourcesPath = AppDataPaths.ResolveExistingOrDefault(
+            _settings.HttpSourcesPath,
+            Path.Combine("Data", "Source", "HttpSource.txt"),
+            _appDirectory,
+            AppContext.BaseDirectory,
+            Environment.CurrentDirectory);
+        _settings.SocksSourcesPath = AppDataPaths.ResolveExistingOrDefault(
+            _settings.SocksSourcesPath,
+            Path.Combine("Data", "Source", "SocksSource.txt"),
+            _appDirectory,
+            AppContext.BaseDirectory,
+            Environment.CurrentDirectory);
+        _settings.GeoIpDatabasePath = AppDataPaths.ResolveExistingOrDefault(
+            _settings.GeoIpDatabasePath,
+            Path.Combine("Data", "Country.mmdb"),
+            _appDirectory,
+            AppContext.BaseDirectory,
+            Environment.CurrentDirectory);
     }
-
-    private string MakeAbsolute(string path) =>
-        Path.IsPathRooted(path) ? path : Path.GetFullPath(Path.Combine(_appDirectory, path));
 
     private void InitGeoIp()
     {
         _geoIp.Dispose();
-        _geoIp = File.Exists(_settings.GeoIpDatabasePath)
-            ? new MaxMindGeoIpResolver(_settings.GeoIpDatabasePath)
+        var path = AppDataPaths.ResolveExistingOrDefault(
+            _settings.GeoIpDatabasePath,
+            Path.Combine("Data", "Country.mmdb"),
+            _appDirectory,
+            AppContext.BaseDirectory,
+            Environment.CurrentDirectory);
+        _settings.GeoIpDatabasePath = path;
+        _geoIp = File.Exists(path)
+            ? new MaxMindGeoIpResolver(path)
             : NullGeoIpResolver.Instance;
+    }
+
+    private void ReportGeoIpStatus()
+    {
+        if (_geoIp is NullGeoIpResolver)
+        {
+            SetStatus(
+                "GeoIP database not found — Country will show Unknown. " +
+                $"Expected: {Path.Combine(_appDirectory, "Data", "Country.mmdb")}");
+        }
     }
 
     private void ApplySettingsToUi()
@@ -93,62 +173,62 @@ public sealed class MainForm : Form
         _settings.TimeoutMs = (int)_timeoutSec.Value * 1000;
         _settings.JudgeUrl = _judgeBox.Text.Trim();
         _settings.ProxyTypeMode = _socksRadio.Checked ? 1 : 0;
+        // Store portable relative paths when possible so moving the app folder doesn't break GeoIP.
+        _settings.HttpSourcesPath = AppDataPaths.ToPortable(_settings.HttpSourcesPath, _appDirectory);
+        _settings.SocksSourcesPath = AppDataPaths.ToPortable(_settings.SocksSourcesPath, _appDirectory);
+        _settings.GeoIpDatabasePath = AppDataPaths.ToPortable(_settings.GeoIpDatabasePath, _appDirectory);
         _settings.Save(_settingsPath);
+        ResolvePaths();
     }
 
     private void BuildUi()
     {
         Text = "μProxy Tool 2.0";
-        Width = 980;
-        Height = 640;
+        Width = 1100;
+        Height = 680;
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new Size(760, 480);
+        MinimumSize = new Size(720, 480);
         Font = new Font("Segoe UI", 9f);
         BackColor = Color.White;
 
-        _title.Text = "μProxy Tool";
-        _title.Font = new Font("Segoe UI Semibold", 16f);
-        _title.ForeColor = Color.FromArgb(60, 60, 60);
-        _title.AutoSize = true;
-        _title.Location = new Point(12, 10);
-
-        var version = new Label
-        {
-            Text = "2.0",
-            AutoSize = true,
-            ForeColor = Color.Gray,
-            Location = new Point(160, 18)
-        };
-
-        var top = new FlowLayoutPanel
+        _topBar = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
-            Height = 78,
-            Padding = new Padding(8, 40, 8, 4),
-            WrapContents = false,
-            AutoSize = false
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = true,
+            Padding = new Padding(8, 8, 8, 4),
+            FlowDirection = FlowDirection.LeftToRight
         };
-
-        top.Controls.AddRange(
+        _topBar.Controls.AddRange(
         [
             Lbl("Mode:"), _httpRadio, _socksRadio,
-            Lbl("  Workers:"), _concurrency,
-            Lbl("  Timeout(s):"), _timeoutSec,
-            Lbl("  Judge:"), _judgeBox
+            Lbl("Workers:"), _concurrency,
+            Lbl("Timeout(s):"), _timeoutSec,
+            Lbl("Judge:"), _judgeBox
         ]);
 
-        var actions = new FlowLayoutPanel
+        _actionBar = new FlowLayoutPanel
         {
             Dock = DockStyle.Top,
-            Height = 40,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = true,
             Padding = new Padding(8, 4, 8, 4),
-            WrapContents = false
+            FlowDirection = FlowDirection.LeftToRight
         };
-        actions.Controls.AddRange(
-        [
-            _btnLoad, _btnScrape, _btnCheck, _btnStop, _btnExport, _btnSettings,
-            _btnSetProxy, _btnResetProxy
-        ]);
+        foreach (var btn in new[]
+                 {
+                     _btnLoad, _btnScrape, _btnCheck, _btnStop, _btnExport, _btnSettings,
+                     _btnProxyChains, _btnResetProxy
+                 })
+        {
+            btn.Margin = new Padding(2);
+            btn.Padding = new Padding(8, 4, 8, 4);
+            btn.AutoSize = true;
+            btn.MinimumSize = new Size(0, 30);
+            _actionBar.Controls.Add(btn);
+        }
 
         _grid.Dock = DockStyle.Fill;
         _grid.AllowUserToAddRows = false;
@@ -166,20 +246,21 @@ public sealed class MainForm : Form
         _grid.EnableHeadersVisualStyles = false;
         _grid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(245, 246, 248);
         _grid.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI Semibold", 9f);
-        _grid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
-        _grid.ColumnHeadersHeight = 28;
+        _grid.ColumnHeadersDefaultCellStyle.WrapMode = DataGridViewTriState.False;
+        _grid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
         _grid.RowTemplate.Height = 24;
         _grid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(0, 120, 215);
         _grid.DefaultCellStyle.SelectionForeColor = Color.White;
         _grid.Columns.AddRange(
         [
-            GridColumn(nameof(ResultRow.Proxy), "Proxy", 180),
-            GridColumn(nameof(ResultRow.Country), "Country", 70),
-            GridColumn(nameof(ResultRow.Anonymity), "Anonymity", 90),
-            GridColumn(nameof(ResultRow.Protocol), "Type", 80),
-            GridColumn(nameof(ResultRow.LatencyMs), "Latency (ms)", 80, rightAlign: true),
-            GridColumn(nameof(ResultRow.Auth), "Auth", 90),
-            GridColumn(nameof(ResultRow.Detail), "Detail", 220)
+            GridColumn(nameof(ResultRow.Proxy), "Proxy", 160, minWidth: 110),
+            GridColumn(nameof(ResultRow.Country), "Country", 110, minWidth: 100),
+            GridColumn(nameof(ResultRow.Anonymity), "Anonymity", 80, minWidth: 72),
+            GridColumn(nameof(ResultRow.Protocol), "Type", 70, minWidth: 60),
+            GridColumn(nameof(ResultRow.ConnectMs), "Connect", 70, rightAlign: true, minWidth: 60),
+            GridColumn(nameof(ResultRow.LatencyMs), "Latency", 70, rightAlign: true, minWidth: 60),
+            GridColumn(nameof(ResultRow.Auth), "Auth", 70, minWidth: 56),
+            GridColumn(nameof(ResultRow.Detail), "Detail", 160, minWidth: 80)
         ]);
         _grid.DataSource = _rows;
         _grid.CellDoubleClick += (_, _) => CopySelected();
@@ -191,17 +272,16 @@ public sealed class MainForm : Form
         _statusLabel.Text = "Ready.";
         _countsLabel.BorderSides = ToolStripStatusLabelBorderSides.Left;
         _countsLabel.BorderStyle = Border3DStyle.Etched;
-        _progress.Width = 160;
+        _progress.AutoSize = false;
+        _progress.Width = 140;
         _percentLabel.Text = "0 %";
-        _status.Items.AddRange([_statusLabel, _countsLabel, _progress, _percentLabel]);
+        _status.Items.AddRange([_statusLabel, _routingLabel, _countsLabel, _progress, _percentLabel]);
         _status.Dock = DockStyle.Bottom;
 
         Controls.Add(_grid);
-        Controls.Add(actions);
-        Controls.Add(top);
+        Controls.Add(_actionBar);
+        Controls.Add(_topBar);
         Controls.Add(_status);
-        Controls.Add(_title);
-        Controls.Add(version);
 
         var menu = new MenuStrip();
         var file = new ToolStripMenuItem("File");
@@ -211,13 +291,20 @@ public sealed class MainForm : Form
         file.DropDownItems.Add("Exit", null, (_, _) => Close());
         var tools = new ToolStripMenuItem("Tools");
         tools.DropDownItems.Add("Settings…", null, (_, _) => OpenSettings());
-        tools.DropDownItems.Add("Emergency Reset System Proxy", null, (_, _) => EmergencyReset());
+        tools.DropDownItems.Add("Routing (Proxy Chains)…", null, (_, _) => OpenProxyChains());
+        var advanced = new ToolStripMenuItem("Advanced");
+        advanced.DropDownItems.Add("Single external proxy (advanced)…", null, (_, _) => SetSystemProxyOptIn());
+        advanced.DropDownItems.Add("Emergency Reset System Proxy", null, (_, _) => EmergencyReset());
+        tools.DropDownItems.Add(advanced);
+        tools.DropDownItems.Add("Scan for secrets (TruffleHog)…", null, (_, _) => OpenSecretScanner());
         var help = new ToolStripMenuItem("Help");
         help.DropDownItems.Add("About μProxy Tool 2.0", null, (_, _) =>
             MessageBox.Show(
                 "μProxy Tool 2.0\n\nProxy scraper & checker.\n" +
-                "No update phone-home. GeoIP is local-only.\n" +
-                "System proxy changes are opt-in with restore.\n\n" +
+                "• Routing (Proxy Chains) — local HTTP/SOCKS gateway with multi-hop / failover.\n" +
+                "• Advanced → Single external proxy — optional WinINET shortcut (not for SOCKS).\n\n" +
+                "Does not route every Windows app and does not route UDP.\n" +
+                "No update phone-home. GeoIP is local-only.\n\n" +
                 "Based on the μProxy Tool 1.81 feature set.",
                 "About", MessageBoxButtons.OK, MessageBoxIcon.Information));
         menu.Items.AddRange([file, tools, help]);
@@ -225,15 +312,62 @@ public sealed class MainForm : Form
         Controls.Add(menu);
     }
 
-    private static DataGridViewTextBoxColumn GridColumn(string property, string header, int width, bool rightAlign = false)
+    private void RestoreWindowPlacement()
+    {
+        var screens = Screen.AllScreens.Select(s =>
+        {
+            var b = s.WorkingArea;
+            return (b.X, b.Y, b.Width, b.Height);
+        });
+
+        var restored = WindowPlacement.TryRestore(
+            _settings.WindowLeft, _settings.WindowTop,
+            _settings.WindowWidth, _settings.WindowHeight,
+            _settings.WindowMaximized, screens);
+
+        if (restored is null)
+            return;
+
+        Width = restored.Value.Width;
+        Height = restored.Value.Height;
+
+        if (_settings.WindowLeft is int left && _settings.WindowTop is int top)
+        {
+            var point = new Point(left, top);
+            // Require a 40px title-bar sliver on some screen.
+            if (Screen.AllScreens.Any(s => s.WorkingArea.Contains(point.X + 40, point.Y + 40)))
+            {
+                StartPosition = FormStartPosition.Manual;
+                Location = point;
+            }
+            // else keep CenterScreen from BuildUi
+        }
+
+        if (restored.Value.Maximized)
+            WindowState = FormWindowState.Maximized;
+    }
+
+    private void SaveWindowPlacement()
+    {
+        var bounds = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+        _settings.WindowWidth = bounds.Width;
+        _settings.WindowHeight = bounds.Height;
+        _settings.WindowLeft = bounds.Left;
+        _settings.WindowTop = bounds.Top;
+        _settings.WindowMaximized = WindowState == FormWindowState.Maximized;
+    }
+
+    private static DataGridViewTextBoxColumn GridColumn(
+        string property, string header, int fillWeight, bool rightAlign = false, int minWidth = 60)
     {
         var column = new DataGridViewTextBoxColumn
         {
             DataPropertyName = property,
             HeaderText = header,
-            FillWeight = width,
-            MinimumWidth = Math.Min(width, 80),
-            SortMode = DataGridViewColumnSortMode.Automatic
+            FillWeight = fillWeight,
+            MinimumWidth = minWidth,
+            SortMode = DataGridViewColumnSortMode.Automatic,
+            Resizable = DataGridViewTriState.True
         };
         if (rightAlign)
             column.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
@@ -262,6 +396,12 @@ public sealed class MainForm : Form
         menu.Items.Add("Copy selected proxies", null, (_, _) => CopySelected());
         menu.Items.Add("Select all", null, (_, _) => _grid.SelectAll());
         menu.Items.Add("Export results…", null, (_, _) => ExportResults());
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Open Routing (Proxy Chains)…", null, (_, _) => OpenProxyChains());
+        menu.Items.Add("Add to Fixed Chain…", null, (_, _) => OpenProxyChains(seedFixed: GetSelectedAliveResults()));
+        menu.Items.Add("Add elite to Smart Pool…", null, (_, _) =>
+            OpenProxyChains(seedPool: GetSelectedAliveResults().Where(r => r.IsAlive && r.Anonymity == AnonymityLevel.Elite).ToList()));
+        menu.Items.Add("Single external proxy (advanced)…", null, (_, _) => SetSystemProxyOptIn());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Clear results", null, (_, _) =>
         {
@@ -294,15 +434,37 @@ public sealed class MainForm : Form
         };
         _btnExport.Click += (_, _) => ExportResults();
         _btnSettings.Click += (_, _) => OpenSettings();
-        _btnSetProxy.Click += (_, _) => SetSystemProxyOptIn();
+        _btnProxyChains.Click += (_, _) => OpenProxyChains();
         _btnResetProxy.Click += (_, _) => EmergencyReset();
-        FormClosing += async (_, e) =>
+        _routing.Changed += () => _ui.Post(_ => RefreshRoutingChip(), null);
+        FormClosing += (_, e) =>
         {
+            if (_chainGateway.IsRunning)
+            {
+                var answer = MessageBox.Show(
+                    "Local gateway routing is still active.\n\n" +
+                    "Closing the app will stop the gateway and restore Windows proxy settings.\n\nContinue?",
+                    "μProxy Tool",
+                    MessageBoxButtons.OKCancel,
+                    MessageBoxIcon.Warning,
+                    MessageBoxDefaultButton.Button2);
+                if (answer != DialogResult.OK)
+                {
+                    e.Cancel = true;
+                    return;
+                }
+            }
+
             if (_session is not null)
-                await _session.DisposeAsync();
+                _session.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            if (_chainGateway.IsRunning)
+                _chainGateway.StopAsync().GetAwaiter().GetResult();
+            _routing.SetOff();
             _geoIp.Dispose();
+            SaveWindowPlacement();
             PersistSettingsFromUi();
         };
+        // Replace previous FormClosing that was registered in WireEvents — remove duplicate below.
         KeyDown += MainForm_KeyDown;
         KeyPreview = true;
     }
@@ -371,10 +533,12 @@ public sealed class MainForm : Form
             Country = result.Country,
             Anonymity = result.Anonymity.ToString(),
             Protocol = FormatProtocol(result.ConfirmedProtocol),
+            ConnectMs = result.ConnectMs ?? 0,
             LatencyMs = result.LatencyMs,
-            Auth = ProxyAuth.Describe(result.AuthMethod),
+            Auth = FormatAuthShort(result.AuthMethod),
             Detail = result.IsAlive ? "" : FailureMessages.Describe(result.Failure, result.ErrorMessage),
-            AnonLevel = result.Anonymity
+            AnonLevel = result.Anonymity,
+            Source = result
         });
         _btnExport.Enabled = true;
     }
@@ -387,6 +551,16 @@ public sealed class MainForm : Form
         ProxyProtocol.Socks5 => "Socks 5",
         ProxyProtocol.Socks4And5 => "Socks 4/5",
         _ => p.ToString()
+    };
+
+    private static string FormatAuthShort(ProxyAuthMethod method) => method switch
+    {
+        ProxyAuthMethod.None => "No",
+        ProxyAuthMethod.Basic => "Basic",
+        ProxyAuthMethod.SocksUserPass => "Yes",
+        ProxyAuthMethod.Socks4UserId => "UserID",
+        ProxyAuthMethod.NtlmRequired => "NTLM",
+        _ => method.ToString()
     };
 
     private void ApplyProgress(ProgressSnapshot snap)
@@ -405,21 +579,6 @@ public sealed class MainForm : Form
         UpdateTitle(snap.UniqueProxies, snap.Alive);
     }
 
-    private void SetBusy(bool busy)
-    {
-        _btnLoad.Enabled = !busy;
-        _btnScrape.Enabled = !busy;
-        _btnCheck.Enabled = !busy;
-        _btnExport.Enabled = !busy && _rows.Count > 0;
-        _btnSettings.Enabled = !busy;
-        _btnStop.Enabled = busy;
-        _httpRadio.Enabled = !busy;
-        _socksRadio.Enabled = !busy;
-        _concurrency.Enabled = !busy;
-        _timeoutSec.Enabled = !busy;
-        _judgeBox.Enabled = !busy;
-    }
-
     private string FormatCounts(ProgressSnapshot snap)
     {
         if (snap.Kind == SessionKind.Scraping)
@@ -434,13 +593,157 @@ public sealed class MainForm : Form
         return $"Alive {snap.Alive}  •  Elite {snap.Elite}  •  Anon {snap.Anonymous}  •  Transp {snap.Transparent}";
     }
 
+    private void SetBusy(bool busy)
+    {
+        _btnLoad.Enabled = !busy;
+        _btnScrape.Enabled = !busy;
+        _btnCheck.Enabled = !busy;
+        _btnExport.Enabled = !busy && _rows.Count > 0;
+        _btnSettings.Enabled = !busy;
+        _btnProxyChains.Enabled = !busy;
+        _btnResetProxy.Enabled = !busy;
+        _btnStop.Enabled = busy;
+        _httpRadio.Enabled = !busy;
+        _socksRadio.Enabled = !busy;
+        _concurrency.Enabled = !busy;
+        _timeoutSec.Enabled = !busy;
+        _judgeBox.Enabled = !busy;
+    }
+
     private void SetStatus(string text) => _statusLabel.Text = text;
+
+    private void RefreshRoutingChip()
+    {
+        _routingLabel.Text = _routing.Summary;
+        _routingLabel.ForeColor = _routing.Status switch
+        {
+            RoutingUiState.Phase.Verified => Color.FromArgb(0, 100, 0),
+            RoutingUiState.Phase.NotVerified => Color.FromArgb(140, 40, 20),
+            RoutingUiState.Phase.Starting or RoutingUiState.Phase.TunnelUp => Color.FromArgb(120, 80, 0),
+            _ => SystemColors.ControlText
+        };
+        UpdateTitle();
+    }
 
     private void UpdateTitle(int? proxies = null, int? alive = null)
     {
         var p = proxies ?? _session?.Proxies.Count ?? 0;
-        var a = alive ?? _rows.Count;
-        Text = $"μProxy Tool 2.0 [{p} loaded / {a} alive]";
+        var aliveCount = alive ?? _rows.Count(r => r.Source is { IsAlive: true });
+        Text = $"μProxy Tool 2.0 — {p} loaded / {aliveCount} alive";
+    }
+
+    private void SetSystemProxyOptIn()
+    {
+        if (!_proxyManager.IsSupported)
+        {
+            MessageBox.Show("System proxy is only available on Windows.", "μProxy Tool",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        if (_grid.CurrentRow?.DataBoundItem is not ResultRow row || row.Source is null)
+        {
+            MessageBox.Show("Select a checked proxy result in the list first.", "μProxy Tool",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        var source = row.Source;
+        if (!source.IsAlive)
+        {
+            MessageBox.Show("That result is not alive. Check proxies again and select a live HTTP/HTTPS row.",
+                "μProxy Tool", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        var protocol = source.ConfirmedProtocol != ProxyProtocol.Unknown
+            ? source.ConfirmedProtocol
+            : source.Proxy.Protocol;
+        var isHttp = protocol is ProxyProtocol.Http or ProxyProtocol.Https;
+        if (!isHttp)
+        {
+            MessageBox.Show(
+                "Windows system proxy cannot use a bare SOCKS endpoint.\n\n" +
+                "Use Routing… (Proxy Chains) so apps talk to the local HTTP gateway, " +
+                "which can then use SOCKS hops.",
+                "Single external proxy",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return;
+        }
+
+        if (source.Anonymity is not (AnonymityLevel.Elite or AnonymityLevel.Anonymous))
+        {
+            var allowLower = MessageBox.Show(
+                $"Selected proxy anonymity is {source.Anonymity} (not Elite/Anonymous).\n\n" +
+                "Advanced override: continue anyway?",
+                "Single external proxy — advanced",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2);
+            if (allowLower != DialogResult.Yes)
+                return;
+        }
+
+        if (_chainGateway.IsRunning && _chainGateway.SystemProxyActive)
+        {
+            var stopGw = MessageBox.Show(
+                "Proxy Chains currently owns automatic Windows routing.\n\n" +
+                "Stop the gateway and apply this single external proxy instead?",
+                "Single external proxy",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2);
+            if (stopGw != DialogResult.Yes)
+                return;
+
+            try
+            {
+                _chainGateway.StopAsync().GetAwaiter().GetResult();
+                _routing.SetOff();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Could not stop the chain gateway: " + ex.Message, "μProxy Tool",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+        }
+
+        var age = source.CheckedAt == default
+            ? "unknown"
+            : $"{Math.Max(0, (int)(DateTimeOffset.UtcNow - source.CheckedAt).TotalMinutes)} min ago";
+        var warn = MessageBox.Show(
+            "WARNING — privacy & connectivity\n\n" +
+            $"Set Windows proxy to:\n  {source.Proxy.Endpoint}\n\n" +
+            $"Protocol: {protocol}\n" +
+            $"Anonymity: {source.Anonymity}\n" +
+            $"Country: {source.Country}\n" +
+            $"Latency: {source.LatencyMs} ms\n" +
+            $"Checked: {age}\n\n" +
+            "• Apps that use Windows proxy settings will send traffic through this public proxy.\n" +
+            "• This does not route every Windows app and does not route UDP.\n" +
+            "• Prefer Routing… (Proxy Chains) for local gateway / multi-hop.\n\n" +
+            "Continue?",
+            "Single external proxy — opt-in",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2);
+
+        if (warn != DialogResult.Yes)
+            return;
+
+        try
+        {
+            _proxyManager.SetProxyOptIn(source.Proxy.Endpoint);
+            RefreshRoutingChip();
+            SetStatus($"Single external proxy set to {source.Proxy.Endpoint}. Use Emergency Reset to restore.");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("Failed to set proxy: " + ex.Message, "μProxy Tool",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     private void LoadProxies()
@@ -504,6 +807,8 @@ public sealed class MainForm : Form
     {
         PersistSettingsFromUi();
         InitGeoIp();
+        // Recreate session so it picks up a freshly resolved GeoIP database.
+        RecreateSessionPreservingState();
         EnsureSession();
 
         if (_session!.Proxies.Count == 0)
@@ -540,6 +845,19 @@ public sealed class MainForm : Form
         }
     }
 
+    private void RecreateSessionPreservingState()
+    {
+        if (_session is null)
+            return;
+        var proxies = _session.Proxies.ToList();
+        _ = _session.DisposeAsync();
+        _session = null;
+        EnsureSession();
+        _session!.ClearProxies();
+        foreach (var p in proxies)
+            _session.Proxies.Add(p);
+    }
+
     private void ExportResults()
     {
         EnsureSession();
@@ -564,8 +882,10 @@ public sealed class MainForm : Form
             ApplySettingsToUi();
             ResolvePaths();
             InitGeoIp();
+            ReportGeoIpStatus();
+            _chainGateway.HttpPort = _settings.ChainHttpPort;
+            _chainGateway.SocksPort = _settings.ChainSocksPort;
             _settings.Save(_settingsPath);
-            // recreate session with new settings/geoip
             if (_session is not null)
             {
                 var proxies = _session.Proxies.ToList();
@@ -582,48 +902,63 @@ public sealed class MainForm : Form
         }
     }
 
-    private void SetSystemProxyOptIn()
+    private void OpenSecretScanner()
     {
-        if (!_proxyManager.IsSupported)
-        {
-            MessageBox.Show("System proxy is only available on Windows.", "μProxy Tool",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return;
-        }
+        PersistSettingsFromUi();
+        using var form = new SecretScanForm(_settings, GetLoadedProxiesText);
+        form.ShowDialog(this);
+    }
 
-        if (_grid.CurrentRow?.DataBoundItem is not ResultRow row)
-        {
-            MessageBox.Show("Select an alive proxy in the list first.", "μProxy Tool",
-                MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
+    private string? GetLoadedProxiesText()
+    {
+        if (_session is null || _session.Proxies.Count == 0)
+            return null;
+        return string.Join(Environment.NewLine,
+            _session.Proxies.Select(p => p.ToExportString(includeCredentials: true)));
+    }
 
-        var warn = MessageBox.Show(
-            "WARNING — privacy & connectivity\n\n" +
-            $"This will set your Windows (WinINET) system proxy to:\n  {row.Proxy}\n\n" +
-            "• Your browser/apps using system proxy will send traffic through this public proxy.\n" +
-            "• The proxy operator may see your destinations.\n" +
-            "• Your previous settings will be saved and can be restored with Emergency Reset.\n\n" +
-            "Continue?",
-            "Set System Proxy — Opt-in",
-            MessageBoxButtons.YesNo,
-            MessageBoxIcon.Warning,
-            MessageBoxDefaultButton.Button2);
+    private void OpenProxyChains(
+        IReadOnlyList<ProxyCheckResult>? seedFixed = null,
+        IReadOnlyList<ProxyCheckResult>? seedPool = null)
+    {
+        PersistSettingsFromUi();
+        _chainGateway.HttpPort = _settings.ChainHttpPort;
+        _chainGateway.SocksPort = _settings.ChainSocksPort;
 
-        if (warn != DialogResult.Yes)
-            return;
+        using var form = new ChainControlForm(
+            _settings,
+            GetAliveResults,
+            _chainGateway,
+            _chainManager,
+            _routing,
+            _appData,
+            _chainProfileStore,
+            _poolStore,
+            _credentialStore,
+            _settingsPath,
+            seedFixed,
+            seedPool);
+        form.ShowDialog(this);
+        RefreshRoutingChip();
+        SetStatus(_routing.Summary);
+    }
 
-        try
-        {
-            _proxyManager.SetProxyOptIn(row.Proxy);
-            Text = $"μProxy Tool 2.0 [{row.Proxy} — system proxy ACTIVE]";
-            SetStatus($"System proxy set to {row.Proxy}. Use Emergency Reset to restore.");
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show("Failed to set proxy: " + ex.Message, "μProxy Tool",
-                MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
+    private IReadOnlyList<ProxyCheckResult> GetAliveResults()
+    {
+        return _rows
+            .Where(r => r.Source is { IsAlive: true })
+            .Select(r => r.Source!)
+            .ToList();
+    }
+
+    private IReadOnlyList<ProxyCheckResult> GetSelectedAliveResults()
+    {
+        return _grid.SelectedRows
+            .Cast<DataGridViewRow>()
+            .Select(r => r.DataBoundItem as ResultRow)
+            .Where(r => r?.Source is { IsAlive: true })
+            .Select(r => r!.Source!)
+            .ToList();
     }
 
     private void EmergencyReset()
@@ -633,6 +968,17 @@ public sealed class MainForm : Form
 
         try
         {
+            if (_chainGateway.IsRunning && _chainGateway.SystemProxyActive)
+            {
+                _chainGateway.StopAsync().GetAwaiter().GetResult();
+                _routing.SetOff();
+                MessageBox.Show("Chain gateway stopped and Windows proxy restored.", "μProxy Tool",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                RefreshRoutingChip();
+                SetStatus("Routing Off (gateway stopped).");
+                return;
+            }
+
             if (_proxyManager.HasPendingRestore)
             {
                 _proxyManager.Restore();
@@ -641,17 +987,13 @@ public sealed class MainForm : Form
             }
             else
             {
-                // Still clear ProxyEnable as a last resort (user-requested emergency).
-                var snap = _proxyManager.Capture();
-                snap.ProxyEnable = 0;
-                snap.ProxyServer = "";
-                _proxyManager.SaveBackup(snap); // so Restore path is consistent
-                _proxyManager.Restore(snap);
-                _proxyManager.ClearBackup();
-                MessageBox.Show("System proxy disabled (no prior backup found).", "μProxy Tool",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(
+                    "No Windows proxy backup is pending. Nothing to restore.",
+                    "μProxy Tool",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
             }
-            UpdateTitle();
+            RefreshRoutingChip();
             SetStatus("System proxy reset.");
         }
         catch (Exception ex)
@@ -679,9 +1021,11 @@ public sealed class MainForm : Form
         public string Country { get; set; } = "";
         public string Anonymity { get; set; } = "";
         public string Protocol { get; set; } = "";
+        public int ConnectMs { get; set; }
         public int LatencyMs { get; set; }
         public string Auth { get; set; } = "";
         public string Detail { get; set; } = "";
         public AnonymityLevel AnonLevel { get; set; } = AnonymityLevel.Unknown;
+        public ProxyCheckResult? Source { get; init; }
     }
 }

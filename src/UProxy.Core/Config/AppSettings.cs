@@ -6,7 +6,7 @@ namespace UProxy.Core.Config;
 
 public sealed class AppSettings
 {
-    public const int CurrentVersion = 1;
+    public const int CurrentVersion = 2;
 
     public int Version { get; set; } = CurrentVersion;
 
@@ -38,8 +38,7 @@ public sealed class AppSettings
     public string SocksSourcesPath { get; set; } = Path.Combine("Data", "Source", "SocksSource.txt");
     public string GeoIpDatabasePath { get; set; } = Path.Combine("Data", "Country.mmdb");
 
-    public string UserAgent { get; set; } =
-        "μProxy-Tool/2.0 (+https://github.com; privacy-respecting proxy checker)";
+    public string UserAgent { get; set; } = UserAgents.Default;
 
     /// <summary>Proxifier-compatible: resolve destination hostnames through the proxy (SOCKS4a / SOCKS5 domain).</summary>
     public bool ResolveHostnamesThroughProxy { get; set; } = true;
@@ -49,6 +48,44 @@ public sealed class AppSettings
 
     /// <summary>Allocate 127.8.x.x Fake-IP placeholders for hostnames resolved through proxy.</summary>
     public bool EnableFakeIpDns { get; set; } = true;
+
+    /// <summary>Path to (or name of) the TruffleHog executable used by the secret scanner.</summary>
+    public string TruffleHogPath { get; set; } = "trufflehog";
+
+    /// <summary>
+    /// Let TruffleHog live-verify findings against provider APIs. Off by default: verification
+    /// transmits candidate secrets to third parties, which conflicts with the tool's privacy stance.
+    /// </summary>
+    public bool SecretScanVerify { get; set; }
+
+    /// <summary>Last main-window width in pixels (null = use default).</summary>
+    public int? WindowWidth { get; set; }
+
+    /// <summary>Last main-window height in pixels (null = use default).</summary>
+    public int? WindowHeight { get; set; }
+
+    /// <summary>Last main-window left edge; null = center.</summary>
+    public int? WindowLeft { get; set; }
+
+    /// <summary>Last main-window top edge; null = center.</summary>
+    public int? WindowTop { get; set; }
+
+    public bool WindowMaximized { get; set; }
+
+    /// <summary>Local HTTP chain gateway port (loopback).</summary>
+    public int ChainHttpPort { get; set; } = 8877;
+
+    /// <summary>Local SOCKS5 chain gateway port (loopback).</summary>
+    public int ChainSocksPort { get; set; } = 8878;
+
+    /// <summary>When true (Windows), opt-in WinINET to the local HTTP gateway after listeners start.</summary>
+    public bool ChainEnableSystemProxy { get; set; }
+
+    /// <summary>Persisted id of the last active chain profile (if any).</summary>
+    public string? ActiveChainProfileId { get; set; }
+
+    /// <summary>URL used to verify exit IP after enabling a chain.</summary>
+    public string ExitIpCheckUrl { get; set; } = "https://api.ipify.org";
 
     public ProxyProtocol PreferredCheckMode =>
         ProxyTypeMode == 1 ? ProxyProtocol.Socks5 : ProxyProtocol.Http;
@@ -92,5 +129,20 @@ public sealed class AppSettings
         ConnectTimeoutMs = Math.Clamp(ConnectTimeoutMs, 500, TimeoutMs);
         if (string.IsNullOrWhiteSpace(JudgeUrl))
             JudgeUrl = "http://azenv.net";
+        // HTTP/1.1 headers must be ASCII; strip any non-ASCII so checks don't throw.
+        UserAgent = UserAgents.AsciiSafe(UserAgent);
+        // Migrate UA that lost its leading "μ" via AsciiSafe on an older build.
+        if (UserAgent.StartsWith("Proxy-Tool/", StringComparison.Ordinal))
+            UserAgent = UserAgents.Default;
+
+        if (WindowWidth is < 400)
+            WindowWidth = null;
+        if (WindowHeight is < 300)
+            WindowHeight = null;
+
+        ChainHttpPort = Math.Clamp(ChainHttpPort, 1, 65_535);
+        ChainSocksPort = Math.Clamp(ChainSocksPort, 1, 65_535);
+        if (string.IsNullOrWhiteSpace(ExitIpCheckUrl))
+            ExitIpCheckUrl = "https://api.ipify.org";
     }
 }

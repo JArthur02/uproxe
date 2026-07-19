@@ -6,7 +6,7 @@ namespace UProxy.UI;
 public sealed class ExportForm : Form
 {
     private readonly List<ProxyCheckResult> _results;
-    private readonly CheckedListBox _countries = new() { CheckOnClick = true, Width = 180, Height = 160 };
+    private readonly CheckedListBox _countries = new() { CheckOnClick = true, IntegralHeight = false };
     private readonly CheckBox _filterCountry = new() { Text = "Filter countries", AutoSize = true };
     private readonly CheckBox _elite = new() { Text = "Elite", Checked = true, AutoSize = true };
     private readonly CheckBox _anon = new() { Text = "Anonymous", Checked = true, AutoSize = true };
@@ -25,50 +25,131 @@ public sealed class ExportForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(420, 280);
+        AutoScaleMode = AutoScaleMode.Dpi;
+        AutoScaleDimensions = new SizeF(96F, 96F);
+        AutoSize = true;
+        AutoSizeMode = AutoSizeMode.GrowAndShrink;
         Font = new Font("Segoe UI", 9f);
+        MinimumSize = new Size(560, 0);
+        Padding = new Padding(12);
 
         foreach (var c in results.Select(r => r.Country).Distinct().OrderBy(x => x))
             _countries.Items.Add(c, true);
 
-        var anonBox = new GroupBox { Text = "Anonymity", Location = new Point(12, 12), Size = new Size(140, 100) };
-        _elite.Location = new Point(12, 22);
-        _anon.Location = new Point(12, 44);
-        _trans.Location = new Point(12, 66);
-        anonBox.Controls.AddRange([_elite, _anon, _trans]);
+        var columns = new TableLayoutPanel
+        {
+            ColumnCount = 3,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Dock = DockStyle.Top,
+            Padding = new Padding(0, 4, 0, 8)
+        };
+        columns.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33f));
+        columns.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33f));
+        columns.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 34f));
+        columns.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        var typeBox = new GroupBox { Text = "Type", Location = new Point(160, 12), Size = new Size(140, 140) };
-        _http.Location = new Point(12, 22);
-        _https.Location = new Point(12, 44);
-        _socks4.Location = new Point(12, 66);
-        _socks5.Location = new Point(12, 88);
-        _socks45.Location = new Point(12, 110);
-        typeBox.Controls.AddRange([_http, _https, _socks4, _socks5, _socks45]);
-
-        var countryBox = new GroupBox { Text = "Country", Location = new Point(310, 12), Size = new Size(100, 200) };
-        // widen form
-        ClientSize = new Size(520, 300);
-        countryBox.Size = new Size(190, 200);
-        _filterCountry.Location = new Point(10, 20);
-        _countries.Location = new Point(10, 45);
-        _countries.Enabled = false;
-        _filterCountry.CheckedChanged += (_, _) => _countries.Enabled = _filterCountry.Checked;
-        countryBox.Controls.Add(_filterCountry);
-        countryBox.Controls.Add(_countries);
+        columns.Controls.Add(BuildCheckGroup("Anonymity", [_elite, _anon, _trans]), 0, 0);
+        columns.Controls.Add(BuildCheckGroup("Type", [_http, _https, _socks4, _socks5, _socks45]), 1, 0);
+        columns.Controls.Add(BuildCountryGroup(), 2, 0);
 
         var exportBtn = new Button
         {
             Text = "&Export",
-            Width = 100,
-            Height = 28,
-            Location = new Point(200, 230)
+            AutoSize = true,
+            Padding = new Padding(20, 8, 20, 8),
+            MinimumSize = new Size(100, 36),
+            Anchor = AnchorStyles.None
         };
         exportBtn.Click += async (_, _) => await DoExportAsync();
 
-        Controls.Add(anonBox);
-        Controls.Add(typeBox);
-        Controls.Add(countryBox);
-        Controls.Add(exportBtn);
+        var footer = new TableLayoutPanel
+        {
+            ColumnCount = 3,
+            AutoSize = true,
+            Dock = DockStyle.Bottom,
+            Padding = new Padding(0, 8, 0, 4)
+        };
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+        footer.Controls.Add(exportBtn, 1, 0);
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.Controls.Add(columns, 0, 0);
+        root.Controls.Add(footer, 0, 1);
+        Controls.Add(root);
+
+        _filterCountry.CheckedChanged += (_, _) => _countries.Enabled = _filterCountry.Checked;
+        _countries.Enabled = false;
+    }
+
+    private static GroupBox BuildCheckGroup(string title, CheckBox[] boxes)
+    {
+        var panel = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.TopDown,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = false,
+            Dock = DockStyle.Fill,
+            Padding = new Padding(8, 4, 8, 8)
+        };
+        foreach (var box in boxes)
+        {
+            box.Margin = new Padding(0, 2, 0, 2);
+            panel.Controls.Add(box);
+        }
+
+        return new GroupBox
+        {
+            Text = title,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Dock = DockStyle.Fill,
+            Padding = new Padding(8),
+            Margin = new Padding(4)
+        }.Also(g => g.Controls.Add(panel));
+    }
+
+    private GroupBox BuildCountryGroup()
+    {
+        var panel = new TableLayoutPanel
+        {
+            ColumnCount = 1,
+            RowCount = 2,
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            Padding = new Padding(8, 4, 8, 8)
+        };
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 160));
+        _filterCountry.Margin = new Padding(0, 0, 0, 6);
+        _countries.Dock = DockStyle.Fill;
+        panel.Controls.Add(_filterCountry, 0, 0);
+        panel.Controls.Add(_countries, 0, 1);
+
+        var box = new GroupBox
+        {
+            Text = "Country",
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Dock = DockStyle.Fill,
+            Padding = new Padding(8),
+            Margin = new Padding(4),
+            MinimumSize = new Size(180, 0)
+        };
+        box.Controls.Add(panel);
+        return box;
     }
 
     private async Task DoExportAsync()
@@ -128,5 +209,14 @@ public sealed class ExportForm : Form
         if (_socks5.Checked) set.Add(ProxyProtocol.Socks5);
         if (_socks45.Checked) set.Add(ProxyProtocol.Socks4And5);
         return set;
+    }
+}
+
+file static class ExportFormExtensions
+{
+    public static T Also<T>(this T value, Action<T> action)
+    {
+        action(value);
+        return value;
     }
 }
