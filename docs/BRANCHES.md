@@ -22,7 +22,6 @@ How branches in [JArthur02/uproxe](https://github.com/JArthur02/uproxe) are orga
 
 | Branch | PR | Notes |
 |--------|-----|-------|
-| `cursor/fix-toolbar-chain-layout-f851` | [#28](https://github.com/JArthur02/uproxe/pull/28) (draft) | ChainControl dock layout + toolbar dedup; needs rebase onto `cursor/v3-proxychains` |
 | `codex/investigate-proxychains-implementation` | [#16](https://github.com/JArthur02/uproxe/pull/16) (open) | proxychains-ng config export |
 
 ## Tier 4 — safe to delete
@@ -43,6 +42,7 @@ Branches whose commits are already in `cursor/v3-proxychains` (0 unique commits 
 - `cursor/fix-parser-build-and-host-validation-35cc` — #4, #6, #12 merged
 - `cursor/uproxy-net10-rewrite-b2b1` — #1, #7 merged
 - `cursor/document-no-dev-env-53f2` — #5 superseded (dev env now documented in README)
+- `cursor/fix-toolbar-chain-layout-f851` — #30 merged
 
 ## Naming conventions
 
@@ -69,4 +69,4 @@ gh api repos/JArthur02/uproxe/compare/cursor/v3-proxychains...BRANCH --jq '.ahea
 git push origin --delete BRANCH
 ```
 
-_Last updated: 2026-07-19_
+_Last updated: 2026-07-19 (post #30 toolbar layout merge)_
