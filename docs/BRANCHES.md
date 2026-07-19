@@ -41,6 +41,7 @@ Branches whose commits are already in `cursor/v3-proxychains` (0 unique commits 
 - `cursor/fix-nonascii-ua-and-ui-overlap-35cc` — #13 merged
 - `cursor/fix-parser-build-and-host-validation-35cc` — #4, #6, #12 merged
 - `cursor/uproxy-net10-rewrite-b2b1` — #1, #7 merged
+- `cursor/document-no-dev-env-53f2` — #5 superseded (dev env now documented in README)
 - `cursor/fix-toolbar-chain-layout-f851` — #30 merged
 
 ## Naming conventions
