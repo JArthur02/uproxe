@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Net.Http;
 using UProxy.Core.Chaining;
+using UProxy.Core.Checking;
 using UProxy.Core.Config;
 using UProxy.Core.Gateway;
 using UProxy.Core.Models;
@@ -18,7 +19,8 @@ public sealed class ChainControlForm : Form
 {
     private readonly AppSettings _settings;
     private readonly string _settingsPath;
-    private readonly Func<IReadOnlyList<ProxyCheckResult>> _getAliveResults;
+    private readonly Func<IReadOnlyList<ProxyCheckResult>> _getSessionResults;
+    private readonly Action<ProxyCheckResult>? _onCheckResult;
     private readonly ChainGatewayHost _gateway;
     private readonly ChainManager _manager;
     private readonly RoutingUiState _routing;
@@ -27,7 +29,12 @@ public sealed class ChainControlForm : Form
     private readonly ChainProfileStore _profiles;
     private readonly PoolStore _pools;
     private readonly WindowsProxyManager _winProxy = new();
+    private readonly Dictionary<string, ProxyCheckResult> _checkOverrides =
+        new(StringComparer.OrdinalIgnoreCase);
     private bool _busy;
+    private bool _fixedDirty;
+    private bool _poolDirty;
+    private bool _suppressDirty;
 
     private readonly Label _lblMode = new() { AutoSize = true };
     private readonly Label _lblHttp = new() { AutoSize = true };
@@ -52,7 +59,6 @@ public sealed class ChainControlForm : Form
     private readonly Button _btnStart = new() { Text = "Start", AutoSize = true };
     private readonly Button _btnStop = new() { Text = "Stop", AutoSize = true };
     private readonly Button _btnRestore = new() { Text = "Restore Windows Proxy", AutoSize = true };
-    private readonly Button _btnExitIp = new() { Text = "Check Exit IP", AutoSize = true };
     private readonly Button _btnCopyHttp = new() { Text = "Copy HTTP", AutoSize = true };
     private readonly Button _btnCopySocks = new() { Text = "Copy SOCKS", AutoSize = true };
 
@@ -86,7 +92,6 @@ public sealed class ChainControlForm : Form
         IntegralHeight = false
     };
 
-    private Button? _btnStartStrict;
     private System.Windows.Forms.Timer? _liveTimer;
 
     private readonly BindingList<HopItem> _fixedItems = [];
@@ -94,7 +99,7 @@ public sealed class ChainControlForm : Form
 
     public ChainControlForm(
         AppSettings settings,
-        Func<IReadOnlyList<ProxyCheckResult>> getAliveResults,
+        Func<IReadOnlyList<ProxyCheckResult>> getSessionResults,
         ChainGatewayHost gateway,
         ChainManager manager,
         RoutingUiState routing,
@@ -104,10 +109,12 @@ public sealed class ChainControlForm : Form
         ProtectedCredentialStore? credentials = null,
         string? settingsPath = null,
         IReadOnlyList<ProxyCheckResult>? seedFixed = null,
-        IReadOnlyList<ProxyCheckResult>? seedPool = null)
+        IReadOnlyList<ProxyCheckResult>? seedPool = null,
+        Action<ProxyCheckResult>? onCheckResult = null)
     {
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
-        _getAliveResults = getAliveResults ?? throw new ArgumentNullException(nameof(getAliveResults));
+        _getSessionResults = getSessionResults ?? throw new ArgumentNullException(nameof(getSessionResults));
+        _onCheckResult = onCheckResult;
         _gateway = gateway ?? throw new ArgumentNullException(nameof(gateway));
         _manager = manager ?? throw new ArgumentNullException(nameof(manager));
         _routing = routing ?? throw new ArgumentNullException(nameof(routing));
@@ -126,8 +133,8 @@ public sealed class ChainControlForm : Form
         StartPosition = FormStartPosition.CenterParent;
         AutoScaleMode = AutoScaleMode.Dpi;
         AutoScaleDimensions = new SizeF(96F, 96F);
-        MinimumSize = new Size(820, 520);
-        ClientSize = new Size(880, 600);
+        MinimumSize = new Size(940, 620);
+        ClientSize = new Size(980, 700);
         Font = new Font("Segoe UI", 9f);
         BackColor = Color.White;
         ShowInTaskbar = false;
@@ -158,6 +165,17 @@ public sealed class ChainControlForm : Form
         if (!seededFixed && !seededPool)
             TryLoadActiveProfile();
 
+        _suppressDirty = true;
+        try
+        {
+            ClearFixedDirty();
+            ClearPoolDirty();
+        }
+        finally
+        {
+            _suppressDirty = false;
+        }
+
         RefreshStatus();
     }
 
@@ -166,7 +184,7 @@ public sealed class ChainControlForm : Form
     /// </summary>
     public ChainControlForm(
         AppSettings settings,
-        Func<IReadOnlyList<ProxyCheckResult>> getAliveResults,
+        Func<IReadOnlyList<ProxyCheckResult>> getSessionResults,
         ChainGatewayHost gateway,
         ChainManager manager,
         AppDataLayout? layout = null,
@@ -175,10 +193,11 @@ public sealed class ChainControlForm : Form
         ProtectedCredentialStore? credentials = null,
         string? settingsPath = null,
         IReadOnlyList<ProxyCheckResult>? seedFixed = null,
-        IReadOnlyList<ProxyCheckResult>? seedPool = null)
+        IReadOnlyList<ProxyCheckResult>? seedPool = null,
+        Action<ProxyCheckResult>? onCheckResult = null)
         : this(
             settings,
-            getAliveResults,
+            getSessionResults,
             gateway,
             manager,
             new RoutingUiState(),
@@ -188,7 +207,8 @@ public sealed class ChainControlForm : Form
             credentials,
             settingsPath,
             seedFixed,
-            seedPool)
+            seedPool,
+            onCheckResult)
     {
     }
 
@@ -197,43 +217,44 @@ public sealed class ChainControlForm : Form
         StyleButton(_btnStart);
         StyleButton(_btnStop);
         StyleButton(_btnRestore);
-        StyleButton(_btnExitIp);
         StyleButton(_btnCopyHttp);
         StyleButton(_btnCopySocks);
         _btnStart.Font = new Font(Font, FontStyle.Bold);
         _btnCopyHttp.MinimumSize = new Size(72, 28);
         _btnCopySocks.MinimumSize = new Size(72, 28);
 
-        var root = new TableLayoutPanel
+        // Dock-based shell: AutoSize+Dock.Fill inside TableLayoutPanel was collapsing the
+        // tab page to a thin strip and clipping the side-action buttons.
+        var note = new Label
         {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 3,
-            Padding = new Padding(10)
+            Text = "Does not route every Windows app and does not route UDP.",
+            AutoSize = false,
+            Dock = DockStyle.Bottom,
+            Height = 28,
+            ForeColor = Color.FromArgb(120, 70, 20),
+            TextAlign = ContentAlignment.MiddleLeft,
+            Padding = new Padding(10, 0, 10, 4)
         };
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        var header = new TableLayoutPanel
+        var header = new FlowLayoutPanel
         {
-            Dock = DockStyle.Fill,
+            Dock = DockStyle.Top,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            ColumnCount = 1,
-            Margin = new Padding(0, 0, 0, 8)
+            Padding = new Padding(10, 10, 10, 6)
         };
-        header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-        header.Controls.Add(_lblMode, 0, header.RowCount++);
-        header.Controls.Add(_lblHttp, 0, header.RowCount++);
-        header.Controls.Add(_lblSocks, 0, header.RowCount++);
-        header.Controls.Add(_lblWinInet, 0, header.RowCount++);
-        header.Controls.Add(_lblRouting, 0, header.RowCount++);
-        header.Controls.Add(_lblState, 0, header.RowCount++);
-        header.Controls.Add(_lblHops, 0, header.RowCount++);
-        header.Controls.Add(_lblHint, 0, header.RowCount++);
-        header.Controls.Add(_lblBanner, 0, header.RowCount++);
+
+        foreach (var lbl in new[]
+                 {
+                     _lblMode, _lblHttp, _lblSocks, _lblWinInet, _lblRouting, _lblState, _lblHops,
+                     _lblHint, _lblBanner
+                 })
+        {
+            lbl.Margin = new Padding(0, 0, 0, 2);
+            header.Controls.Add(lbl);
+        }
 
         var headerBtns = new FlowLayoutPanel
         {
@@ -244,78 +265,52 @@ public sealed class ChainControlForm : Form
             Margin = new Padding(0, 6, 0, 0),
             Padding = new Padding(0)
         };
-        headerBtns.Controls.Add(_btnStart);
-        headerBtns.Controls.Add(_btnStop);
-        headerBtns.Controls.Add(_btnCopyHttp);
-        headerBtns.Controls.Add(_btnCopySocks);
-        headerBtns.Controls.Add(_btnRestore);
-        headerBtns.Controls.Add(_btnExitIp);
-        header.Controls.Add(headerBtns, 0, header.RowCount++);
+        headerBtns.Controls.AddRange([_btnStart, _btnStop, _btnCopyHttp, _btnCopySocks, _btnRestore]);
+        header.Controls.Add(headerBtns);
 
+        _tabs.Dock = DockStyle.Fill;
         _tabs.TabPages.Add(BuildFixedTab());
         _tabs.TabPages.Add(BuildPoolTab());
 
-        var note = new Label
-        {
-            Text = "Does not route every Windows app and does not route UDP.",
-            AutoSize = true,
-            ForeColor = Color.FromArgb(120, 70, 20),
-            Margin = new Padding(0, 8, 0, 0)
-        };
-
-        root.Controls.Add(header, 0, 0);
-        root.Controls.Add(_tabs, 0, 1);
-        root.Controls.Add(note, 0, 2);
-        Controls.Add(root);
+        // Add Fill first, then Top/Bottom so docking reserves edges correctly.
+        Controls.Add(_tabs);
+        Controls.Add(header);
+        Controls.Add(note);
     }
 
     private TabPage BuildFixedTab()
     {
-        var page = new TabPage("Fixed Chain");
-        var root = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 2,
-            RowCount = 3,
-            Padding = new Padding(8)
-        };
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, SideColumnWidth));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        var page = new TabPage("Fixed Chain") { Padding = new Padding(8) };
 
-        var side = BuildSidePanel();
         var addSession = MakeSideButton("Add from session");
         var paste = MakeSideButton("Paste ordered list");
         var remove = MakeSideButton("Remove");
-        var up = MakeSideButton("Up");
-        var down = MakeSideButton("Down");
-        var save = MakeSideButton("Save");
+        var up = MakeSideButton("Move up");
+        var down = MakeSideButton("Move down");
         var test = MakeSideButton("Test chain");
-        _btnStartStrict = MakeSideButton("Start Strict");
 
         addSession.Click += (_, _) => AddFixedFromSession();
         paste.Click += (_, _) => PasteFixedOrdered();
         remove.Click += (_, _) => RemoveSelectedFixed();
         up.Click += (_, _) => MoveFixed(-1);
         down.Click += (_, _) => MoveFixed(1);
-        save.Click += (_, _) => SaveFixedProfile();
         test.Click += async (_, _) => await TestFixedAsync();
-        _btnStartStrict.Click += async (_, _) => await StartStrictAsync();
 
-        side.Controls.AddRange([addSession, paste, remove, up, down, save, test, _btnStartStrict]);
+        var side = BuildSideActions(addSession, paste, remove, up, down, test);
 
+        var left = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 0, 8, 0) };
         var toolbar = BuildFixedProfileToolbar();
+        toolbar.Dock = DockStyle.Top;
         var nameRow = BuildNameRow(_fixedName);
+        nameRow.Dock = DockStyle.Bottom;
+        _fixedHops.Dock = DockStyle.Fill;
 
-        root.Controls.Add(toolbar, 0, 0);
-        root.Controls.Add(_fixedHops, 0, 1);
-        root.Controls.Add(side, 1, 0);
-        root.SetRowSpan(side, 3);
-        root.Controls.Add(nameRow, 0, 2);
+        left.Controls.Add(_fixedHops);
+        left.Controls.Add(toolbar);
+        left.Controls.Add(nameRow);
 
-        page.Controls.Add(root);
+        page.Controls.Add(left);
+        page.Controls.Add(side);
         return page;
     }
 
@@ -328,8 +323,8 @@ public sealed class ChainControlForm : Form
             WrapContents = true,
             FlowDirection = FlowDirection.LeftToRight,
             Dock = DockStyle.Top,
-            Margin = new Padding(0, 0, 0, 6),
-            Padding = new Padding(0)
+            Margin = new Padding(0),
+            Padding = new Padding(0, 0, 0, 6)
         };
 
         var btnNew = MakeToolbarButton("New");
@@ -352,63 +347,58 @@ public sealed class ChainControlForm : Form
 
     private TabPage BuildPoolTab()
     {
-        var page = new TabPage("Smart Pool");
-        var root = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 2,
-            RowCount = 4,
-            Padding = new Padding(8)
-        };
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, SideColumnWidth));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        var page = new TabPage("Smart Pool") { Padding = new Padding(8) };
 
-        var side = BuildSidePanel();
         var importAlive = MakeSideButton("Import from session");
         var paste = MakeSideButton("Paste candidates");
         var remove = MakeSideButton("Remove");
-        var refreshBadges = MakeSideButton("Refresh badges");
+        var recheck = MakeSideButton("Recheck pool");
         var removeFailed = MakeSideButton("Remove failed");
-        var save = MakeSideButton("Save pool");
 
         importAlive.Click += (_, _) => ImportPoolFromSession();
         paste.Click += (_, _) => PastePool();
         remove.Click += (_, _) => RemoveSelectedPool();
-        refreshBadges.Click += (_, _) => RefreshPoolBadges();
+        recheck.Click += async (_, _) => await RecheckPoolAsync();
         removeFailed.Click += (_, _) => RemoveFailedPoolItems();
-        save.Click += (_, _) => SavePool();
 
-        side.Controls.AddRange([importAlive, paste, remove, refreshBadges, removeFailed, save]);
+        var side = BuildSideActions(importAlive, paste, remove, recheck, removeFailed);
 
-        _poolEligibility.Items.AddRange([
-            "Elite only (default)",
-            "Elite + Anonymous",
-            "Any alive"
-        ]);
-        _poolEligibility.SelectedIndex = 0;
+        if (_poolEligibility.Items.Count == 0)
+        {
+            _poolEligibility.Items.AddRange([
+                "Elite only (default)",
+                "Elite + Anonymous",
+                "Any alive"
+            ]);
+            _poolEligibility.SelectedIndex = 0;
+        }
 
-        _poolMode.Items.AddRange([
-            "Fast failover",
-            "Auto 2-hop"
-        ]);
-        _poolMode.SelectedIndex = 0;
+        if (_poolMode.Items.Count == 0)
+        {
+            _poolMode.Items.AddRange([
+                "Fast failover",
+                "Auto 2-hop"
+            ]);
+            _poolMode.SelectedIndex = 0;
+        }
 
+        var left = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 0, 8, 0) };
         var toolbar = BuildPoolProfileToolbar();
+        toolbar.Dock = DockStyle.Top;
         var options = BuildPoolOptionsPanel();
+        options.Dock = DockStyle.Bottom;
         var nameRow = BuildNameRow(_poolName);
+        nameRow.Dock = DockStyle.Bottom;
+        _poolCandidates.Dock = DockStyle.Fill;
 
-        root.Controls.Add(toolbar, 0, 0);
-        root.Controls.Add(_poolCandidates, 0, 1);
-        root.Controls.Add(side, 1, 0);
-        root.SetRowSpan(side, 4);
-        root.Controls.Add(options, 0, 2);
-        root.Controls.Add(nameRow, 0, 3);
+        // Bottom dock: last added sits on the bottom edge.
+        left.Controls.Add(_poolCandidates);
+        left.Controls.Add(toolbar);
+        left.Controls.Add(options);
+        left.Controls.Add(nameRow);
 
-        page.Controls.Add(root);
+        page.Controls.Add(left);
+        page.Controls.Add(side);
         return page;
     }
 
@@ -421,8 +411,8 @@ public sealed class ChainControlForm : Form
             WrapContents = true,
             FlowDirection = FlowDirection.LeftToRight,
             Dock = DockStyle.Top,
-            Margin = new Padding(0, 0, 0, 6),
-            Padding = new Padding(0)
+            Margin = new Padding(0),
+            Padding = new Padding(0, 0, 0, 6)
         };
 
         var btnNew = MakeToolbarButton("New");
@@ -454,18 +444,18 @@ public sealed class ChainControlForm : Form
     {
         var panel = new TableLayoutPanel
         {
-            Dock = DockStyle.Top,
+            Dock = DockStyle.Bottom,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 2,
             RowCount = 2,
-            Margin = new Padding(0, 8, 0, 0),
-            Padding = new Padding(0)
+            Margin = new Padding(0),
+            Padding = new Padding(0, 8, 0, 4)
         };
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30f));
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30f));
 
         var eligibilityLabel = new Label
         {
@@ -486,6 +476,8 @@ public sealed class ChainControlForm : Form
             UseMnemonic = false
         };
 
+        _poolEligibility.Dock = DockStyle.Fill;
+        _poolMode.Dock = DockStyle.Fill;
         _poolEligibility.Margin = new Padding(0, 2, 0, 2);
         _poolMode.Margin = new Padding(0, 2, 0, 2);
 
@@ -496,36 +488,51 @@ public sealed class ChainControlForm : Form
         return panel;
     }
 
-    /// <summary>Fixed side-rail width so long action buttons are never clipped.</summary>
+    /// <summary>Side-rail width for action buttons (DPI-friendly fixed column).</summary>
     private const int SideColumnWidth = 200;
 
-    private static FlowLayoutPanel BuildSidePanel() =>
-        new()
+    private static TableLayoutPanel BuildSideActions(params Button[] buttons)
+    {
+        var side = new TableLayoutPanel
         {
-            FlowDirection = FlowDirection.TopDown,
-            WrapContents = false,
-            AutoScroll = true,
-            Dock = DockStyle.Fill,
+            Dock = DockStyle.Right,
+            Width = SideColumnWidth,
+            ColumnCount = 1,
+            RowCount = buttons.Length + 1,
             Padding = new Padding(8, 0, 0, 0),
             Margin = new Padding(0)
         };
+        side.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+
+        for (var i = 0; i < buttons.Length; i++)
+        {
+            side.RowStyles.Add(new RowStyle(SizeType.Absolute, 40f));
+            var b = buttons[i];
+            b.Dock = DockStyle.Fill;
+            b.Margin = new Padding(0, 0, 0, 6);
+            side.Controls.Add(b, 0, i);
+        }
+
+        side.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+        return side;
+    }
 
     private static TableLayoutPanel BuildNameRow(TextBox nameBox)
     {
         var row = new TableLayoutPanel
         {
-            Dock = DockStyle.Top,
+            Dock = DockStyle.Bottom,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 2,
             RowCount = 1,
-            Margin = new Padding(0, 8, 0, 0),
-            Padding = new Padding(0)
+            Height = 36,
+            Margin = new Padding(0),
+            Padding = new Padding(0, 8, 0, 0)
         };
-        // AutoSize label column — Absolute widths wrap "Name:" into "Na"/"me:" under DPI.
         row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-        row.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        row.RowStyles.Add(new RowStyle(SizeType.Absolute, 28f));
 
         var label = new Label
         {
@@ -533,11 +540,11 @@ public sealed class ChainControlForm : Form
             AutoSize = true,
             Anchor = AnchorStyles.Left,
             TextAlign = ContentAlignment.MiddleLeft,
-            Margin = new Padding(0, 6, 10, 0),
+            Margin = new Padding(0, 4, 10, 0),
             UseMnemonic = false
         };
         nameBox.Dock = DockStyle.Fill;
-        nameBox.Margin = new Padding(0, 2, 0, 2);
+        nameBox.Margin = new Padding(0, 0, 0, 0);
         nameBox.MinimumSize = new Size(120, 0);
 
         row.Controls.Add(label, 0, 0);
@@ -550,14 +557,31 @@ public sealed class ChainControlForm : Form
         _btnStart.Click += async (_, _) => await StartFromHeaderAsync();
         _btnStop.Click += async (_, _) => await StopGatewayAsync();
         _btnRestore.Click += async (_, _) => await RestoreWindowsProxyAsync();
-        _btnExitIp.Click += async (_, _) => await CheckExitIpAsync();
         _btnCopyHttp.Click += (_, _) => CopyGatewayEndpoint(_gateway.HttpPort, "HTTP");
         _btnCopySocks.Click += (_, _) => CopyGatewayEndpoint(_gateway.SocksPort, "SOCKS");
         _tabs.SelectedIndexChanged += (_, _) => RefreshStatus();
-        _fixedItems.ListChanged += (_, _) => RefreshStatus();
-        _poolItems.ListChanged += (_, _) => RefreshStatus();
-        _poolEligibility.SelectedIndexChanged += (_, _) => RefreshStatus();
-        _poolMode.SelectedIndexChanged += (_, _) => RefreshStatus();
+        _fixedItems.ListChanged += (_, _) =>
+        {
+            MarkFixedDirty();
+            RefreshStatus();
+        };
+        _poolItems.ListChanged += (_, _) =>
+        {
+            MarkPoolDirty();
+            RefreshStatus();
+        };
+        _fixedName.TextChanged += (_, _) => MarkFixedDirty();
+        _poolName.TextChanged += (_, _) => MarkPoolDirty();
+        _poolEligibility.SelectedIndexChanged += (_, _) =>
+        {
+            MarkPoolDirty();
+            RefreshStatus();
+        };
+        _poolMode.SelectedIndexChanged += (_, _) =>
+        {
+            MarkPoolDirty();
+            RefreshStatus();
+        };
         _routing.Changed += () =>
         {
             if (IsHandleCreated && !IsDisposed)
@@ -613,14 +637,8 @@ public sealed class ChainControlForm : Form
         if (!_gateway.IsRunning)
             return;
 
-        var result = MessageBox.Show(this,
-            "The local gateway is still running.\n\n" +
-            "Yes — Keep running and close this window\n" +
-            "No — Stop the gateway and close\n" +
-            "Cancel — Stay on this window",
-            "Proxy Chains",
-            MessageBoxButtons.YesNoCancel,
-            MessageBoxIcon.Question);
+        using var dlg = new GatewayCloseDialog();
+        var result = dlg.ShowDialog(this);
 
         if (result == DialogResult.Cancel)
         {
@@ -641,7 +659,7 @@ public sealed class ChainControlForm : Form
                 e.Cancel = true;
             }
         }
-        // Yes = keep gateway running while closing the dialog.
+        // Yes = Keep running
     }
 
     private void CopyGatewayEndpoint(int port, string label)
@@ -673,6 +691,42 @@ public sealed class ChainControlForm : Form
         _lblBanner.Text = "";
     }
 
+    private void MarkFixedDirty()
+    {
+        if (_suppressDirty)
+            return;
+        _fixedDirty = true;
+        UpdateDirtyTabs();
+    }
+
+    private void MarkPoolDirty()
+    {
+        if (_suppressDirty)
+            return;
+        _poolDirty = true;
+        UpdateDirtyTabs();
+    }
+
+    private void ClearFixedDirty()
+    {
+        _fixedDirty = false;
+        UpdateDirtyTabs();
+    }
+
+    private void ClearPoolDirty()
+    {
+        _poolDirty = false;
+        UpdateDirtyTabs();
+    }
+
+    private void UpdateDirtyTabs()
+    {
+        if (_tabs.TabPages.Count > 0)
+            _tabs.TabPages[0].Text = _fixedDirty ? "Fixed Chain *" : "Fixed Chain";
+        if (_tabs.TabPages.Count > 1)
+            _tabs.TabPages[1].Text = _poolDirty ? "Smart Pool *" : "Smart Pool";
+    }
+
     private void SetBusy(bool busy)
     {
         _busy = busy;
@@ -681,8 +735,6 @@ public sealed class ChainControlForm : Form
         {
             _btnStart.Enabled = false;
             _btnStop.Enabled = false;
-            if (_btnStartStrict is not null)
-                _btnStartStrict.Enabled = false;
         }
         else
         {
@@ -690,20 +742,16 @@ public sealed class ChainControlForm : Form
         }
     }
 
-    private static Button MakeSideButton(string text)
-    {
-        var b = new Button
+    private static Button MakeSideButton(string text) =>
+        new()
         {
             Text = text,
             AutoSize = false,
-            Size = new Size(SideColumnWidth - 16, 34),
-            Margin = new Padding(0, 0, 0, 6),
-            Padding = new Padding(8, 4, 8, 4),
             TextAlign = ContentAlignment.MiddleLeft,
-            UseMnemonic = false
+            UseMnemonic = false,
+            Padding = new Padding(8, 0, 8, 0),
+            Margin = new Padding(0)
         };
-        return b;
-    }
 
     private static void StyleButton(Button b)
     {
@@ -773,13 +821,6 @@ public sealed class ChainControlForm : Form
 
             _btnStart.Enabled = canHeaderStart;
             _btnStop.Enabled = running;
-            _btnExitIp.Enabled = running && hops.Count > 0;
-
-            if (_btnStartStrict is not null)
-            {
-                _btnStartStrict.Text = running ? "Apply Strict" : "Start Strict";
-                _btnStartStrict.Enabled = canStrict;
-            }
         }
 
         if (!running && canHeaderStart)
@@ -876,21 +917,29 @@ public sealed class ChainControlForm : Form
                 if (!match)
                     continue;
 
-                _fixedName.Text = p.Name;
-                _fixedItems.Clear();
-                foreach (var h in p.Hops)
-                    _fixedItems.Add(new HopItem(h));
-
-                if (!string.IsNullOrWhiteSpace(p.CandidatePoolId))
+                _suppressDirty = true;
+                try
                 {
-                    _poolName.Text = p.CandidatePoolId;
-                    var pool = _pools.Load(p.CandidatePoolId);
-                    if (pool is not null)
+                    _fixedName.Text = p.Name;
+                    _fixedItems.Clear();
+                    foreach (var h in p.Hops)
+                        _fixedItems.Add(new HopItem(h));
+
+                    if (!string.IsNullOrWhiteSpace(p.CandidatePoolId))
                     {
-                        _poolItems.Clear();
-                        foreach (var c in pool)
-                            TryAddPool(c);
+                        _poolName.Text = p.CandidatePoolId;
+                        var pool = _pools.Load(p.CandidatePoolId);
+                        if (pool is not null)
+                        {
+                            _poolItems.Clear();
+                            foreach (var c in pool)
+                                TryAddPool(c);
+                        }
                     }
+                }
+                finally
+                {
+                    _suppressDirty = false;
                 }
 
                 break;
@@ -970,9 +1019,18 @@ public sealed class ChainControlForm : Form
 
     private void NewFixedProfile()
     {
-        _fixedItems.Clear();
-        _fixedName.Text = "strict-chain";
-        _fixedProfilePicker.SelectedIndex = -1;
+        _suppressDirty = true;
+        try
+        {
+            _fixedItems.Clear();
+            _fixedName.Text = "strict-chain";
+            _fixedProfilePicker.SelectedIndex = -1;
+            ClearFixedDirty();
+        }
+        finally
+        {
+            _suppressDirty = false;
+        }
         ClearBanner();
         RefreshStatus();
     }
@@ -996,25 +1054,36 @@ public sealed class ChainControlForm : Form
                 return;
             }
 
-            _fixedName.Text = p.Name;
-            _fixedItems.Clear();
-            foreach (var h in p.Hops)
-                _fixedItems.Add(new HopItem(h));
-
-            if (!string.IsNullOrWhiteSpace(p.CandidatePoolId))
+            _suppressDirty = true;
+            try
             {
-                _poolName.Text = p.CandidatePoolId;
-                var pool = _pools.Load(p.CandidatePoolId);
-                if (pool is not null)
+                _fixedName.Text = p.Name;
+                _fixedItems.Clear();
+                foreach (var h in p.Hops)
+                    _fixedItems.Add(new HopItem(h));
+
+                if (!string.IsNullOrWhiteSpace(p.CandidatePoolId))
                 {
-                    _poolItems.Clear();
-                    foreach (var c in pool)
-                        TryAddPool(c);
-                    RefreshPoolPicker(p.CandidatePoolId);
+                    _poolName.Text = p.CandidatePoolId;
+                    var pool = _pools.Load(p.CandidatePoolId);
+                    if (pool is not null)
+                    {
+                        _poolItems.Clear();
+                        foreach (var c in pool)
+                            TryAddPool(c);
+                        RefreshPoolPicker(p.CandidatePoolId);
+                        ClearPoolDirty();
+                    }
                 }
+
+                RefreshFixedProfilePicker(p.Name);
+                ClearFixedDirty();
+            }
+            finally
+            {
+                _suppressDirty = false;
             }
 
-            RefreshFixedProfilePicker(p.Name);
             ShowBanner($"Loaded chain \"{p.Name}\".", success: true);
             RefreshStatus();
         }
@@ -1075,9 +1144,18 @@ public sealed class ChainControlForm : Form
 
     private void NewPoolProfile()
     {
-        _poolItems.Clear();
-        _poolName.Text = "default-pool";
-        _poolPicker.SelectedIndex = -1;
+        _suppressDirty = true;
+        try
+        {
+            _poolItems.Clear();
+            _poolName.Text = "default-pool";
+            _poolPicker.SelectedIndex = -1;
+            ClearPoolDirty();
+        }
+        finally
+        {
+            _suppressDirty = false;
+        }
         ClearBanner();
         RefreshStatus();
     }
@@ -1101,12 +1179,21 @@ public sealed class ChainControlForm : Form
                 return;
             }
 
-            _poolName.Text = name;
-            _poolItems.Clear();
-            foreach (var c in pool)
-                TryAddPool(c);
+            _suppressDirty = true;
+            try
+            {
+                _poolName.Text = name;
+                _poolItems.Clear();
+                foreach (var c in pool)
+                    TryAddPool(c);
+                RefreshPoolPicker(name);
+                ClearPoolDirty();
+            }
+            finally
+            {
+                _suppressDirty = false;
+            }
 
-            RefreshPoolPicker(name);
             RefreshPoolBadges();
             ShowBanner($"Loaded pool \"{name}\" ({_poolItems.Count} candidate(s)).", success: true);
             RefreshStatus();
@@ -1216,7 +1303,7 @@ public sealed class ChainControlForm : Form
 
     private void AddFixedFromSession()
     {
-        var alive = _getAliveResults().Where(r => r.IsAlive).ToList();
+        var alive = _getSessionResults().Where(r => r.IsAlive).ToList();
         if (alive.Count == 0)
         {
             ShowBanner("No alive proxies in the current session.", success: false);
@@ -1288,7 +1375,7 @@ public sealed class ChainControlForm : Form
 
     private void ImportPoolFromSession()
     {
-        var matching = _getAliveResults().Where(MatchesEligibilityPolicy).ToList();
+        var matching = _getSessionResults().Where(MatchesEligibilityPolicy).ToList();
         if (matching.Count == 0)
         {
             ShowBanner(
@@ -1366,6 +1453,86 @@ public sealed class ChainControlForm : Form
         _poolItems.ResetBindings();
         _poolCandidates.Invalidate();
         _poolCandidates.Refresh();
+    }
+
+    private async Task RecheckPoolAsync()
+    {
+        if (_poolItems.Count == 0)
+        {
+            ShowBanner("Add Smart Pool candidates before rechecking.", success: false);
+            return;
+        }
+
+        if (_busy)
+            return;
+
+        SetBusy(true);
+        ShowBanner($"Rechecking {_poolItems.Count} candidate(s)…", success: true);
+
+        var checker = new ProxyChecker(_settings);
+        var alive = 0;
+        var failed = 0;
+
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+            await checker.EnsureClientIpAsync(cts.Token).ConfigureAwait(true);
+
+            for (var i = 0; i < _poolItems.Count; i++)
+            {
+                var item = _poolItems[i];
+                var hop = item.Candidate.Hop;
+                ShowBanner($"Rechecking {i + 1}/{_poolItems.Count}: {hop.Endpoint}…", success: true);
+
+                ProxyCheckResult result;
+                try
+                {
+                    result = hop.Kind == ProxyKind.Http
+                        ? await checker.CheckHttpAsync(hop.Proxy, cts.Token).ConfigureAwait(true)
+                        : await checker.CheckSocksAsync(hop.Proxy, cts.Token).ConfigureAwait(true);
+                }
+                catch (OperationCanceledException)
+                {
+                    ShowBanner("Recheck cancelled.", success: false);
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    result = new ProxyCheckResult
+                    {
+                        Proxy = hop.Proxy,
+                        IsAlive = false,
+                        Failure = FailureReason.ConnectRefused,
+                        ErrorMessage = ex.Message,
+                        CheckedAt = DateTimeOffset.UtcNow
+                    };
+                }
+
+                _checkOverrides[EndpointKey(hop)] = result;
+                item.Candidate = item.Candidate with
+                {
+                    Country = string.IsNullOrWhiteSpace(result.Country) ? item.Candidate.Country : result.Country,
+                    LatencyMs = result.IsAlive ? result.LatencyMs : item.Candidate.LatencyMs,
+                    SuccessRate = result.IsAlive ? 1.0 : 0.0,
+                    LastChecked = result.CheckedAt
+                };
+                _onCheckResult?.Invoke(result);
+
+                if (result.IsAlive)
+                    alive++;
+                else
+                    failed++;
+            }
+
+            MarkPoolDirty();
+            RefreshPoolBadges();
+            RefreshStatus();
+            ShowBanner($"Recheck complete: {alive} alive, {failed} failed.", success: alive > 0 || failed == 0);
+        }
+        finally
+        {
+            SetBusy(false);
+        }
     }
 
     private void RemoveFailedPoolItems()
@@ -1473,19 +1640,33 @@ public sealed class ChainControlForm : Form
     private Dictionary<string, ProxyCheckResult> SessionResultsByEndpoint()
     {
         var map = new Dictionary<string, ProxyCheckResult>(StringComparer.OrdinalIgnoreCase);
-        foreach (var r in _getAliveResults())
+        foreach (var r in EnumerateKnownResults())
         {
             var key = EndpointKey(ResultToHop(r));
-            map.TryAdd(key, r);
+            map[key] = r;
         }
 
         return map;
     }
 
+    private IEnumerable<ProxyCheckResult> EnumerateKnownResults()
+    {
+        foreach (var r in _checkOverrides.Values)
+            yield return r;
+        foreach (var r in _getSessionResults())
+            yield return r;
+    }
+
     private bool TryFindSessionResult(ProxyHop hop, out ProxyCheckResult matched)
     {
         var exactKey = EndpointKey(hop);
-        foreach (var r in _getAliveResults())
+        if (_checkOverrides.TryGetValue(exactKey, out var over))
+        {
+            matched = over;
+            return true;
+        }
+
+        foreach (var r in _getSessionResults())
         {
             var resultHop = ResultToHop(r);
             if (string.Equals(EndpointKey(resultHop), exactKey, StringComparison.OrdinalIgnoreCase))
@@ -1498,7 +1679,7 @@ public sealed class ChainControlForm : Form
         // Prefer kind/protocol match above; fall back to host:port.
         var hostPort = HostPortKey(hop);
         ProxyCheckResult? fallback = null;
-        foreach (var r in _getAliveResults())
+        foreach (var r in EnumerateKnownResults())
         {
             var resultHop = ResultToHop(r);
             if (!string.Equals(HostPortKey(resultHop), hostPort, StringComparison.OrdinalIgnoreCase))
@@ -1555,6 +1736,7 @@ public sealed class ChainControlForm : Form
             _profiles.Save(profile);
             PersistActiveProfileId(profile.Id);
             RefreshFixedProfilePicker(name);
+            ClearFixedDirty();
             ShowBanner($"Saved chain \"{name}\".", success: true);
         }
         catch (Exception ex)
@@ -1576,6 +1758,7 @@ public sealed class ChainControlForm : Form
         {
             _pools.Save(name, _poolItems.Select(i => i.Candidate).ToList());
             RefreshPoolPicker(name);
+            ClearPoolDirty();
             ShowBanner($"Saved pool \"{name}\".", success: true);
         }
         catch (Exception ex)
@@ -2044,40 +2227,6 @@ public sealed class ChainControlForm : Form
         }
     }
 
-    private async Task CheckExitIpAsync()
-    {
-        if (!_gateway.IsRunning || _manager.GetActiveHops().Count == 0)
-        {
-            ShowBanner("Start a chain first.", success: false);
-            return;
-        }
-
-        SetBusy(true);
-        try
-        {
-            ValueTask<Stream> ConnectCallback(SocketsHttpConnectionContext ctx, CancellationToken ct)
-            {
-                var dest = new ChainDestination(ctx.DnsEndPoint.Host, ctx.DnsEndPoint.Port);
-                return new ValueTask<Stream>(_manager.ConnectAsync(dest, ct));
-            }
-
-            var ip = await ExitIpChecker.CheckAsync(
-                ConnectCallback,
-                _settings.ExitIpCheckUrl,
-                CancellationToken.None).ConfigureAwait(true);
-
-            ShowBanner($"Exit IP: {ip}", success: true);
-        }
-        catch (Exception ex)
-        {
-            ShowBanner($"Exit IP check failed: {ex.Message}", success: false);
-        }
-        finally
-        {
-            SetBusy(false);
-        }
-    }
-
     private ProxyChainProfile BuildFixedProfile(string name)
     {
         var existingId = Guid.TryParse(_settings.ActiveChainProfileId, out var gid) ? gid : Guid.NewGuid();
@@ -2157,7 +2306,7 @@ public sealed class ChainControlForm : Form
 
     private sealed class PoolItem(PoolCandidate candidate, Func<PoolCandidate, string> badgeResolver)
     {
-        public PoolCandidate Candidate { get; } = candidate;
+        public PoolCandidate Candidate { get; set; } = candidate;
         public override string ToString()
         {
             var c = Candidate;
@@ -2218,6 +2367,73 @@ public sealed class ChainControlForm : Form
             };
             buttons.Controls.Add(cancel);
 
+            Controls.Add(label);
+            Controls.Add(buttons);
+        }
+    }
+
+    private sealed class GatewayCloseDialog : Form
+    {
+        public GatewayCloseDialog()
+        {
+            Text = "Proxy Chains";
+            StartPosition = FormStartPosition.CenterParent;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            ShowInTaskbar = false;
+            AutoScaleMode = AutoScaleMode.Dpi;
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            ClientSize = new Size(460, 160);
+            Font = new Font("Segoe UI", 9f);
+
+            var label = new Label
+            {
+                Text = "The local gateway is still running.\n\nChoose how to leave this window:",
+                AutoSize = false,
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.TopLeft,
+                Padding = new Padding(12, 12, 12, 0)
+            };
+
+            var buttons = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Bottom,
+                FlowDirection = FlowDirection.RightToLeft,
+                WrapContents = true,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Padding = new Padding(8, 8, 8, 10)
+            };
+
+            var cancel = new Button
+            {
+                Text = "Cancel",
+                DialogResult = DialogResult.Cancel,
+                AutoSize = true,
+                MinimumSize = new Size(88, 32),
+                Margin = new Padding(6, 0, 0, 0)
+            };
+            var stopClose = new Button
+            {
+                Text = "Stop and close",
+                DialogResult = DialogResult.No,
+                AutoSize = true,
+                MinimumSize = new Size(120, 32),
+                Margin = new Padding(6, 0, 0, 0)
+            };
+            var keep = new Button
+            {
+                Text = "Keep running",
+                DialogResult = DialogResult.Yes,
+                AutoSize = true,
+                MinimumSize = new Size(120, 32),
+                Margin = new Padding(6, 0, 0, 0)
+            };
+
+            AcceptButton = keep;
+            CancelButton = cancel;
+            buttons.Controls.AddRange([cancel, stopClose, keep]);
             Controls.Add(label);
             Controls.Add(buttons);
         }
