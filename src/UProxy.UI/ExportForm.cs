@@ -16,6 +16,7 @@ public sealed class ExportForm : Form
     private readonly CheckBox _socks4 = new() { Text = "Socks 4", Checked = true, AutoSize = true };
     private readonly CheckBox _socks5 = new() { Text = "Socks 5", Checked = true, AutoSize = true };
     private readonly CheckBox _socks45 = new() { Text = "Socks 4/5", Checked = true, AutoSize = true };
+    private readonly CheckBox _includeCredentials = new() { Text = "Include credentials", AutoSize = true };
 
     public ExportForm(List<ProxyCheckResult> results)
     {
@@ -73,6 +74,9 @@ public sealed class ExportForm : Form
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+        _includeCredentials.Anchor = AnchorStyles.None;
+        _includeCredentials.Margin = new Padding(0, 0, 12, 0);
+        footer.Controls.Add(_includeCredentials, 0, 0);
         footer.Controls.Add(exportBtn, 1, 0);
 
         var root = new TableLayoutPanel
@@ -157,6 +161,7 @@ public sealed class ExportForm : Form
         var filter = new ExportFilter
         {
             AliveOnly = true,
+            IncludeCredentials = _includeCredentials.Checked,
             FilterByCountry = _filterCountry.Checked,
             AnonymityLevels = BuildAnon(),
             Protocols = BuildProtocols(),
@@ -165,7 +170,7 @@ public sealed class ExportForm : Form
 
         using var dlg = new SaveFileDialog
         {
-            Filter = "Text list|*.txt|CSV|*.csv|JSON|*.json",
+            Filter = "Text list|*.txt|CSV|*.csv|JSON|*.json|Proxychains config|*.conf",
             FileName = "proxies"
         };
         if (dlg.ShowDialog(this) != DialogResult.OK)
@@ -179,6 +184,8 @@ public sealed class ExportForm : Form
                 count = await ProxyExporter.WriteCsvAsync(path, _results, filter);
             else if (path.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
                 count = await ProxyExporter.WriteJsonAsync(path, _results, filter);
+            else if (path.EndsWith(".conf", StringComparison.OrdinalIgnoreCase))
+                count = await ProxyExporter.WriteProxyChainsAsync(path, _results, filter);
             else
                 count = await ProxyExporter.WritePlainAsync(path, _results, filter);
 
