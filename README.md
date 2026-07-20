@@ -32,6 +32,18 @@ dotnet run --project src/UProxy.UI -c Release
 
 Output: `src/UProxy.UI/bin/Release/net10.0-windows/uProxy Tool.exe`
 
+## Prebuilt Windows x64 ZIPs
+
+Signed-off binaries are **not** on `main`. They live on [`cursor/publish-win-x64-zip-35cc`](https://github.com/JArthur02/uproxe/tree/cursor/publish-win-x64-zip-35cc) under [`dist/`](dist/README.md) (self-contained and framework-dependent). See [`dist/MANIFEST.json`](dist/MANIFEST.json) for checksums and the source commit.
+
+To rebuild and refresh `dist/` on Windows:
+
+```powershell
+.\scripts\publish-win-x64-zip.ps1
+```
+
+For a signed Microsoft Store installer, see [`packaging/exe/README.md`](packaging/exe/README.md).
+
 ## Data files
 
 Shipped next to the UI:

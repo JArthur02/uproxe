@@ -1,0 +1,81 @@
+name: Build signed Microsoft Store EXE
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Three-part installer version
+        required: true
+        default: 2.0.0
+        type: string
+      publisher:
+        description: Verified publisher name shown by Windows
+        required: true
+        default: uproxy
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install Inno Setup 6
+        shell: pwsh
+        run: choco install innosetup --no-progress --yes
+
+      - name: Materialize signing certificate
+        id: certificate
+        shell: pwsh
+        env:
+          SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_PFX_BASE64)) {
+            throw "Repository secret WINDOWS_SIGNING_PFX_BASE64 is not configured."
+          }
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_PFX_PASSWORD)) {
+            throw "Repository secret WINDOWS_SIGNING_PFX_PASSWORD is not configured."
+          }
+          $pfxPath = Join-Path $env:RUNNER_TEMP "uproxy-signing.pfx"
+          [IO.File]::WriteAllBytes(
+            $pfxPath,
+            [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
+          "pfx_path=$pfxPath" >> $env:GITHUB_OUTPUT
+
+      - name: Build and sign Store installer
+        shell: pwsh
+        env:
+          SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+          UPROXY_VERSION: ${{ inputs.version }}
+          UPROXY_PUBLISHER: ${{ inputs.publisher }}
+        run: |
+          .\packaging\exe\build-store-exe.ps1 `
+            -Version $env:UPROXY_VERSION `
+            -Publisher $env:UPROXY_PUBLISHER `
+            -PfxPath "${{ steps.certificate.outputs.pfx_path }}" `
+            -PfxPassword $env:SIGNING_PFX_PASSWORD
+
+      - name: Remove temporary certificate file
+        if: always()
+        shell: pwsh
+        run: Remove-Item "${{ steps.certificate.outputs.pfx_path }}" -Force -ErrorAction SilentlyContinue
+
+      - name: Upload signed EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: uproxy-${{ inputs.version }}-signed-store-exe
+          path: |
+            artifacts/store-exe/installer/*.exe
+            artifacts/store-exe/SHA256SUMS.txt
+          if-no-files-found: error
