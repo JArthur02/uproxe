@@ -8,15 +8,16 @@ How branches in [JArthur02/uproxe](https://github.com/JArthur02/uproxe) are orga
 |--------|------|------|
 | `main` | Default branch; latest accepted μProxy 2.x / v3 gateway release line | — |
 | `cursor/v3-proxychains` | Active proxy-chain gateway development; merge here first | `main` |
+| `release/v2.0` | **Signed** μProxy Tool 2.0 distribution (no v3 proxy-chains); SignPath → GitHub Releases | forked pre-v3 |
 
-**Workflow:** feature branches → PR into `cursor/v3-proxychains` → when stable, PR `cursor/v3-proxychains` → `main`.
+**Workflow:** feature branches → PR into `cursor/v3-proxychains` → when stable, PR `cursor/v3-proxychains` → `main`. Signed Windows releases ship from `release/v2.0` only (see [docs/SIGNPATH.md](SIGNPATH.md) on that branch).
 
 ## Tier 2 — topic / archive (keep, do not delete)
 
 | Branch | Role |
 |--------|------|
 | `fyer-clone` | Proxifier v4.14 binary drop (reference only; not built by solution) |
-| `cursor/publish-win-x64-zip-35cc` | Windows x64 ZIP distribution archive (`dist/`); see `docs/PUBLISH-BRANCH.md` on that branch |
+| `cursor/publish-win-x64-zip-35cc` | Legacy v3-preview ZIP archive (`dist/`); superseded by SignPath releases on `release/v2.0` |
 
 ## Tier 3 — open work
 
@@ -68,4 +69,4 @@ gh api repos/JArthur02/uproxe/compare/cursor/v3-proxychains...BRANCH --jq '.ahea
 git push origin --delete BRANCH
 ```
 
-_Last updated: 2026-07-20 (publish branch organization)_
+_Last updated: 2026-07-20 (SignPath v2.0 release line)_
