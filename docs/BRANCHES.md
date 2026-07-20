@@ -16,7 +16,7 @@ How branches in [JArthur02/uproxe](https://github.com/JArthur02/uproxe) are orga
 | Branch | Role |
 |--------|------|
 | `fyer-clone` | Proxifier v4.14 binary drop (reference only; not built by solution) |
-| `cursor/publish-win-x64-zip-35cc` | Immutable pre-chains Win x64 ZIP snapshot |
+| `cursor/publish-win-x64-zip-35cc` | Windows x64 ZIP distribution archive (`dist/`); see `docs/PUBLISH-BRANCH.md` on that branch |
 
 ## Tier 3 — open work
 
@@ -68,4 +68,4 @@ gh api repos/JArthur02/uproxe/compare/cursor/v3-proxychains...BRANCH --jq '.ahea
 git push origin --delete BRANCH
 ```
 
-_Last updated: 2026-07-19 (post #31 proxychains-ng export)_
+_Last updated: 2026-07-20 (publish branch organization)_
