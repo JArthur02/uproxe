@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" default-value="2.0.0" required="true" />
+  </parameters>
+  <pe-file path="uproxy_${version}_x64_setup.exe"
+           product-name="μProxy Tool"
+           product-version="${version}"
+           file-version="${version}"
+           company-name="net'n'yahoo"
+           copyright="Copyright (c) 2026 net'n'yahoo"
+           original-filename="uproxy_${version}_x64_setup.exe">
+    <authenticode-sign />
+  </pe-file>
+</artifact-configuration>

@@ -1,0 +1,154 @@
+name: Release v2.0 (SignPath)
+
+on:
+  push:
+    tags:
+      - 'v2.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Three-part release version (e.g. 2.0.0)
+        required: true
+        default: '2.0.0'
+        type: string
+      signing_policy:
+        description: SignPath signing policy slug (use test-signing until release-signing is configured)
+        required: true
+        default: 'test-signing'
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: release-v2-signpath
+  cancel-in-progress: false
+
+jobs:
+  build_and_sign:
+    runs-on: windows-latest
+    env:
+      RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version number
+        id: version
+        shell: pwsh
+        run: |
+          $raw = $env:RELEASE_VERSION
+          if ($raw -match '^v(\d+\.\d+\.\d+)$') {
+            $version = $Matches[1]
+          } elseif ($raw -match '^\d+\.\d+\.\d+$') {
+            $version = $raw
+          } else {
+            throw "Could not parse version from '$raw'. Use tags like v2.0.0."
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Release version: $version"
+
+      - name: Install .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install Inno Setup 6
+        shell: pwsh
+        run: choco install innosetup --no-progress --yes
+
+      - name: Build unsigned installer and portable ZIP
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          .\packaging\exe\build-installer.ps1 -Version $version
+          .\scripts\build-portable-zip.ps1 -Version $version -SkipTests
+
+      - name: Upload unsigned installer
+        id: upload-installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: uproxy-unsigned-installer
+          path: artifacts/release/installer/uproxy_${{ steps.version.outputs.version }}_x64_setup.exe
+          if-no-files-found: error
+
+      - name: Submit installer signing request to SignPath
+        id: signpath-installer
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' && vars.SIGNPATH_PROJECT_SLUG != '' }}
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ github.event_name == 'push' && (vars.SIGNPATH_SIGNING_POLICY_RELEASE || 'release-signing') || inputs.signing_policy }}
+          artifact-configuration-slug: installer
+          github-artifact-id: ${{ steps.upload-installer.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: ${{ github.workspace }}/signed/installer
+          parameters: |
+            version: ${{ steps.version.outputs.version }}
+
+      - name: Upload unsigned portable ZIP
+        id: upload-portable
+        uses: actions/upload-artifact@v4
+        with:
+          name: uproxy-unsigned-portable
+          path: artifacts/release/portable/uProxyTool-${{ steps.version.outputs.version }}-win-x64-portable.zip
+          if-no-files-found: error
+
+      - name: Submit portable ZIP signing request to SignPath
+        id: signpath-portable
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' && vars.SIGNPATH_PROJECT_SLUG != '' }}
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ github.event_name == 'push' && (vars.SIGNPATH_SIGNING_POLICY_RELEASE || 'release-signing') || inputs.signing_policy }}
+          artifact-configuration-slug: portable-zip
+          github-artifact-id: ${{ steps.upload-portable.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: ${{ github.workspace }}/signed/portable
+          parameters: |
+            version: ${{ steps.version.outputs.version }}
+
+      - name: Collect signed artifacts for release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v2.')
+        shell: pwsh
+        run: |
+          New-Item release-assets -ItemType Directory -Force | Out-Null
+          $version = '${{ steps.version.outputs.version }}'
+          $installer = Get-ChildItem -Path signed/installer -Filter "uproxy_${version}_x64_setup.exe" -Recurse -File | Select-Object -First 1
+          if (-not $installer) { throw "Signed installer not found." }
+          Copy-Item $installer.FullName "release-assets/$($installer.Name)"
+          $portable = Get-ChildItem -Path signed/portable -Filter "uProxyTool-${version}-win-x64-portable.zip" -Recurse -File | Select-Object -First 1
+          if (-not $portable) { throw "Signed portable ZIP not found." }
+          Copy-Item $portable.FullName "release-assets/$($portable.Name)"
+          Get-ChildItem release-assets | ForEach-Object { Write-Host "Release asset: $($_.Name)" }
+
+      - name: Create GitHub Release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v2.')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: SignPath summary
+        if: always()
+        shell: pwsh
+        run: |
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## SignPath release v2.0"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Version: ${{ steps.version.outputs.version }}"
+          if ('${{ steps.signpath-installer.outputs.signing-request-web-url }}') {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- Installer signing request: ${{ steps.signpath-installer.outputs.signing-request-web-url }}"
+          } else {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- SignPath skipped (configure SIGNPATH_ORGANIZATION_ID, SIGNPATH_PROJECT_SLUG, SIGNPATH_API_TOKEN)"
+          }

@@ -30,7 +30,17 @@ Run UI (Windows):
 dotnet run --project src/UProxy.UI -c Release
 ```
 
-Output: `src/UProxy.UI/bin/Release/net10.0-windows/uProxy Tool.exe`
+Output: `src/UProxy.UI/bin/Release/net10.0-windows/uproxy.exe`
+
+## Download (signed releases)
+
+Signed Windows installers for **μProxy Tool 2.0** (v2 release line, without v3 proxy-chains) are published on [GitHub Releases](https://github.com/JArthur02/uproxe/releases) after [SignPath Foundation](https://signpath.org/) code signing.
+
+- [Code signing policy](docs/CODE_SIGNING_POLICY.md)
+- [Privacy policy](docs/PRIVACY.md)
+- [SignPath setup guide](docs/SIGNPATH.md)
+
+Development builds from `main` include v3 proxy-chains features and are not the signed release line. Use branch [`release/v2.0`](https://github.com/JArthur02/uproxe/tree/release/v2.0) for signed 2.0 distributions.
 
 ## Data files
 
@@ -38,11 +48,13 @@ Shipped next to the UI:
 
 - `Data/Source/HttpSource.txt` — HTTP(S) scrape URLs (one per line; `#` comments)
 - `Data/Source/SocksSource.txt` — SOCKS scrape URLs
-- `Data/Country.mmdb` — MaxMind GeoLite2-Country (local only; no ip2c.org). Bundled build date ~2026-07-10; MaxMind’s GeoLite EULA asks that you refresh it periodically (official updates require a free MaxMind license key).
+- `Data/Country.mmdb` — MaxMind GeoLite2-Country (local only; no ip2c.org). See [docs/GEODATA.md](docs/GEODATA.md).
 
 Settings are stored under `%LocalAppData%\uProxyTool\settings.json`.
 
 ## Privacy notes
+
+See [docs/PRIVACY.md](docs/PRIVACY.md) for the full privacy policy. Summary:
 
 - No Pastebin / update phone-home.
 - GeoIP uses the local MMDB only (checked proxy IPs are not sent to a third-party GeoIP API).
