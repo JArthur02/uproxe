@@ -1,0 +1,5 @@
+*.zip binary
+*.png binary
+*.mmdb binary
+*.exe binary
+*.dll binary
