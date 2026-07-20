@@ -4,6 +4,8 @@ Step-by-step checklist to apply for free OSS code signing and run the first sign
 
 ## 1. Apply at SignPath Foundation
 
+See [SIGNPATH_APPLICATION.md](SIGNPATH_APPLICATION.md) for a copy-paste checklist and form values.
+
 Submit the application at [signpath.org/apply.html](https://signpath.org/apply.html) with:
 
 | Field | Value |

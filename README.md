@@ -36,9 +36,14 @@ Output: `src/UProxy.UI/bin/Release/net10.0-windows/uproxy.exe`
 
 Signed Windows installers for **μProxy Tool 2.0** (v2 release line, without v3 proxy-chains) are published on [GitHub Releases](https://github.com/JArthur02/uproxe/releases) after [SignPath Foundation](https://signpath.org/) code signing.
 
-- [Code signing policy](docs/CODE_SIGNING_POLICY.md)
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
+### Code signing policy
+
+- [Code signing policy](docs/CODE_SIGNING_POLICY.md) — team roles, what is signed, release process
 - [Privacy policy](docs/PRIVACY.md)
 - [SignPath setup guide](docs/SIGNPATH.md)
+- [SignPath application (copy-paste)](docs/SIGNPATH_APPLICATION.md)
 
 Development builds from `main` include v3 proxy-chains features and are not the signed release line. Use branch [`release/v2.0`](https://github.com/JArthur02/uproxe/tree/release/v2.0) for signed 2.0 distributions.
 

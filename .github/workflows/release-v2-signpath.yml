@@ -118,7 +118,7 @@ jobs:
             version: ${{ steps.version.outputs.version }}
 
       - name: Collect signed artifacts for release
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v2.')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v2.') && vars.SIGNPATH_ORGANIZATION_ID != '' && vars.SIGNPATH_PROJECT_SLUG != ''
         shell: pwsh
         run: |
           New-Item release-assets -ItemType Directory -Force | Out-Null
@@ -132,7 +132,7 @@ jobs:
           Get-ChildItem release-assets | ForEach-Object { Write-Host "Release asset: $($_.Name)" }
 
       - name: Create GitHub Release
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v2.')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v2.') && vars.SIGNPATH_ORGANIZATION_ID != '' && vars.SIGNPATH_PROJECT_SLUG != ''
         uses: softprops/action-gh-release@v2
         with:
           files: release-assets/*

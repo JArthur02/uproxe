@@ -20,4 +20,4 @@ Approve the SignPath request when the workflow emails you. Artifacts appear on [
 
 ## Apply to SignPath
 
-Follow [SIGNPATH.md](SIGNPATH.md) before the first tagged release.
+Follow [SIGNPATH.md](SIGNPATH.md) and use [SIGNPATH_APPLICATION.md](SIGNPATH_APPLICATION.md) for the apply form before the first tagged release.
