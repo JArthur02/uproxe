@@ -47,6 +47,14 @@ Free code signing provided by [SignPath.io](https://about.signpath.io/), certifi
 
 Development builds from `main` include v3 proxy-chains features and are not the signed release line. Use branch [`release/v2.0`](https://github.com/JArthur02/uproxe/tree/release/v2.0) for signed 2.0 distributions.
 
+### Microsoft Store package
+
+The v2 release can also be built as an unsigned x64 MSIX using
+[`packaging/msix/build-msix.ps1`](packaging/msix/build-msix.ps1). Its identity
+is `leekmadeek.uproxy`; Microsoft Store signs the package after certification.
+See [`packaging/msix/README.md`](packaging/msix/README.md) for the build,
+Partner Center, and restricted-capability details.
+
 ## Data files
 
 Shipped next to the UI:
