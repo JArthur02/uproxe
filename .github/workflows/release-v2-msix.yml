@@ -33,10 +33,13 @@ jobs:
 
       - name: Build MSIX
         shell: pwsh
-        run: >
-          .\packaging\msix\build-msix.ps1
-          -Version '${{ inputs.version }}'
-          -PublisherDisplayName '${{ inputs.publisher_display_name }}'
+        env:
+          MSIX_VERSION: ${{ inputs.version }}
+          PUBLISHER_DISPLAY_NAME: ${{ inputs.publisher_display_name }}
+        run: |
+          .\packaging\msix\build-msix.ps1 `
+            -Version $env:MSIX_VERSION `
+            -PublisherDisplayName $env:PUBLISHER_DISPLAY_NAME
 
       - name: Upload unsigned Microsoft Store package
         uses: actions/upload-artifact@v4
