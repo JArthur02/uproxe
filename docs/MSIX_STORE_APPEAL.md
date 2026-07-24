@@ -1,7 +1,7 @@
 # Microsoft Store restricted-capability reconsideration
 
 Use this text for a new Partner Center submission of package version
-`2.0.0.1`. Also set:
+`2.0.1.0`. Also set:
 
 - **Support URL:** <https://github.com/JArthur02/uproxe/issues>
 - **Developer website:** <https://github.com/JArthur02/uproxe>
@@ -26,7 +26,7 @@ Use this text for a new Partner Center submission of package version
 > broader and less appropriate. Sending the user to Windows Settings would not
 > allow uproxy to atomically save, apply, and restore the selected proxy.
 >
-> Package version 2.0.0.1 requires Windows 11 and uses the fine-grained
+> Package version 2.0.1.0 requires Windows 11 and uses the fine-grained
 > RegistryWriteVirtualization ExcludedKey mechanism. The only unvirtualized
 > path is:
 >

@@ -6,7 +6,7 @@ on:
       version:
         description: Three- or four-part package version
         required: true
-        default: 2.0.0.1
+        default: 2.0.1
         type: string
       publisher_display_name:
         description: Exact PublisherDisplayName from Partner Center

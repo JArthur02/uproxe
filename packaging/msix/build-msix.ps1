@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^\d+\.\d+\.\d+(\.\d+)?$')]
-    [string]$Version = "2.0.0.1",
+    [string]$Version = "2.0.1",
 
     [ValidateSet("x64")]
     [string]$Architecture = "x64",
@@ -41,6 +41,9 @@ if ($versionParts.Count -eq 3) {
 }
 if ($versionParts | Where-Object { $_ -lt 0 -or $_ -gt 65535 }) {
     throw "Each MSIX version component must be between 0 and 65535."
+}
+if ($versionParts[3] -ne 0) {
+    throw "Microsoft Store requires the fourth MSIX version component (revision) to be zero."
 }
 $packageVersion = $versionParts -join "."
 

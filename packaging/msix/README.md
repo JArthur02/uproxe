@@ -31,19 +31,23 @@ From the repository root:
 
 ```powershell
 .\packaging\msix\build-msix.ps1 `
-  -Version 2.0.0.1 `
+  -Version 2.0.1 `
   -PublisherDisplayName "leekmadeek"
 ```
 
 Output:
 
 ```text
-artifacts\release\msix\uproxy_2.0.0.1_x64.msix
+artifacts\release\msix\uproxy_2.0.1.0_x64.msix
 artifacts\release\msix\SHA256SUMS.txt
 ```
 
 The script runs Core tests, publishes `uproxy.exe` and all runtime/data files,
 stages the manifest and visual assets, and invokes `MakeAppx.exe`.
+
+Microsoft Store requires the fourth package-version component to be zero.
+Passing `-Version 2.0.1` produces manifest version `2.0.1.0`; a four-part
+version with a nonzero revision is rejected before packaging.
 
 ## Store submission and signing
 

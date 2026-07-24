@@ -9,7 +9,7 @@
   <Identity
     Name="leekmadeek.uproxy"
     Publisher="CN=F60517ED-816A-4235-AB58-62B0A8BA554D"
-    Version="2.0.0.1"
+    Version="2.0.1.0"
     ProcessorArchitecture="x64" />
 
   <Properties>
