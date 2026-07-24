@@ -1,0 +1,52 @@
+name: Build v2 Microsoft Store MSIX
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Three- or four-part package version
+        required: true
+        default: 2.0.1
+        type: string
+      publisher_display_name:
+        description: Exact PublisherDisplayName from Partner Center
+        required: true
+        default: leekmadeek
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build-msix:
+    name: Build unsigned Store package
+    runs-on: windows-2025
+
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@v4
+
+      - name: Install .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build MSIX
+        shell: pwsh
+        env:
+          MSIX_VERSION: ${{ inputs.version }}
+          PUBLISHER_DISPLAY_NAME: ${{ inputs.publisher_display_name }}
+        run: |
+          .\packaging\msix\build-msix.ps1 `
+            -Version $env:MSIX_VERSION `
+            -PublisherDisplayName $env:PUBLISHER_DISPLAY_NAME
+
+      - name: Upload unsigned Microsoft Store package
+        uses: actions/upload-artifact@v4
+        with:
+          name: uproxy-${{ inputs.version }}-store-msix
+          path: |
+            artifacts/release/msix/*.msix
+            artifacts/release/msix/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30

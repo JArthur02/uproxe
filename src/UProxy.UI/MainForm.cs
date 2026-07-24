@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using UProxy.Core.Checking;
 using UProxy.Core.Config;
 using UProxy.Core.Exporting;
@@ -12,6 +13,8 @@ namespace UProxy.UI;
 
 public sealed class MainForm : Form
 {
+    private const string SupportUrl = "https://github.com/JArthur02/uproxe/issues";
+
     private readonly AppSettings _settings;
     private readonly string _settingsPath;
     private readonly string _appDirectory;
@@ -271,11 +274,14 @@ public sealed class MainForm : Form
         tools.DropDownItems.Add("Scan for secrets (TruffleHog)…", null, (_, _) => OpenSecretScanner());
         tools.DropDownItems.Add("Emergency Reset System Proxy", null, (_, _) => EmergencyReset());
         var help = new ToolStripMenuItem("Help");
+        help.DropDownItems.Add("Support / report an issue…", null, (_, _) => OpenSupport());
+        help.DropDownItems.Add(new ToolStripSeparator());
         help.DropDownItems.Add("About μProxy Tool 2.0", null, (_, _) =>
             MessageBox.Show(
                 "μProxy Tool 2.0\n\nProxy scraper & checker.\n" +
                 "No update phone-home. GeoIP is local-only.\n" +
                 "System proxy changes are opt-in with restore.\n\n" +
+                $"Support: {SupportUrl}\n\n" +
                 "Based on the μProxy Tool 1.81 feature set.",
                 "About", MessageBoxButtons.OK, MessageBoxIcon.Information));
         menu.Items.AddRange([file, tools, help]);
@@ -403,6 +409,12 @@ public sealed class MainForm : Form
         _btnResetProxy.Click += (_, _) => EmergencyReset();
         FormClosing += async (_, e) =>
         {
+            if (!ConfirmProxyRestoreBeforeExit())
+            {
+                e.Cancel = true;
+                return;
+            }
+
             if (_session is not null)
                 await _session.DisposeAsync();
             _geoIp.Dispose();
@@ -411,6 +423,60 @@ public sealed class MainForm : Form
         };
         KeyDown += MainForm_KeyDown;
         KeyPreview = true;
+    }
+
+    private bool ConfirmProxyRestoreBeforeExit()
+    {
+        if (!_proxyManager.IsSupported || !_proxyManager.HasPendingRestore)
+            return true;
+
+        var choice = MessageBox.Show(
+            "A temporary Windows system proxy set by uproxy is still active.\n\n" +
+            "Restore your previous proxy settings before exiting?\n\n" +
+            "Yes (recommended) restores the saved settings.\n" +
+            "No leaves the proxy active and offers recovery next time uproxy starts.\n" +
+            "Cancel keeps uproxy open.",
+            "Restore System Proxy Before Exit",
+            MessageBoxButtons.YesNoCancel,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button1);
+
+        if (choice == DialogResult.Cancel)
+            return false;
+        if (choice == DialogResult.No)
+            return true;
+
+        try
+        {
+            _proxyManager.Restore();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                "The previous proxy settings could not be restored, so uproxy will remain open.\n\n" +
+                ex.Message,
+                "Proxy Restore Failed",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+            return false;
+        }
+    }
+
+    private static void OpenSupport()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(SupportUrl) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                $"Open this support URL in your browser:\n{SupportUrl}\n\n{ex.Message}",
+                "uproxy Support",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
     }
 
     private void MainForm_KeyDown(object? sender, KeyEventArgs e)
