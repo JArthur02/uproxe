@@ -55,7 +55,7 @@ is `leekmadeek.uproxy`; Microsoft Store signs the package after certification.
 See [`packaging/msix/README.md`](packaging/msix/README.md) for the build,
 Partner Center, and restricted-capability details.
 
-[Download the unsigned uproxy 2.0 Microsoft Store MSIX](dist/uproxy_2.0.0.0_x64_unsigned_store.msix)
+[Download the unsigned uproxy 2.0.0.1 Microsoft Store reconsideration MSIX](dist/uproxy_2.0.0.1_x64_unsigned_store.msix)
 ([SHA-256](dist/SHA256SUMS.txt)).
 
 ## Data files
